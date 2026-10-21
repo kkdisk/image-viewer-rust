@@ -3,7 +3,9 @@
 mod app;
 mod canvas;
 mod panels;
+mod playlist;
 mod theme;
+mod thumbnail_loader;
 
 use app::ImageViewerApp;
 use eframe::egui;
