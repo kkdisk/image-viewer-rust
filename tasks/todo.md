@@ -22,20 +22,20 @@
   - **驗證方式**: 單元測試 `cargo test -p core-image --test ops_and_atomic_save`，運算結果與原演算法誤差 < 1e-4。
   - **預估規模**: M (3-4 檔案)
 
-- [ ] Task 1.4: 實作 `viewer-state` 非破壞式 Session 與 In-Memory Undo/Redo 歷史
+- [x] Task 1.4: 實作 `viewer-state` 非破壞式 Session 與 In-Memory Undo/Redo 歷史
   - **驗收條件**: 維護「原圖快照」、「已套用結果」、「調整預覽」三態；Undo 歷史上限 20 步；無磁碟 I/O 開銷。
   - **驗證方式**: 單元測試 `cargo test -p viewer-state`。
   - **預估規模**: M (3-4 檔案)
 
 ### Checkpoint 1: 基礎架構檢查點
-- [ ] 執行 `cargo test --workspace` 全數通過。
-- [ ] 無 UI 狀態下的端到端流程（載入 → 微調 → 提交歷史 → Undo → 原子寫檔）測試通過。
+- [x] 執行 `cargo test --workspace` 全數通過。
+- [x] 無 UI 狀態下的端到端流程（載入 → 微調 → 提交歷史 → Undo → 原子寫檔）測試通過。
 
 ---
 
 ## Phase 2: MVP 基本瀏覽器 (Core Viewer)
 
-- [ ] Task 2.1: 搭建 `app-ui` egui 視窗與自訂暗色主題
+- [x] Task 2.1: 搭建 `app-ui` egui 視窗與自訂暗色主題
   - **驗收條件**: 視窗啟動無白屏；載入等寬/無襯線現代字型；視窗佈局包含選單列、中央畫布、底部列與側邊欄容器。
   - **驗證方式**: `cargo run -p app-ui` 視窗正常顯示，冷啟動 < 50ms。
   - **預估規模**: M (3-4 檔案)
