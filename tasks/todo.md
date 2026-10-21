@@ -79,9 +79,9 @@
 
 ## Phase 4: 重複圖片檢查器與壓縮包支援 (Duplicate Finder & Archive)
 
-- [ ] Task 4.1: 實作 `duplicate-finder` 多執行緒雜湊與 Union-Find 分群
+- [x] Task 4.1: 實作 `duplicate-finder` 多執行緒雜湊與 Union-Find 分群
   - **驗收條件**: 整合 MD5 與 pHash (DCT) 平行計算；Union-Find 依 Hamming distance 門檻自動聚類。
-  - **驗證方式**: 單元測試 `cargo test -p duplicate-finder`（1,000 筆資料分群時間 < 100ms）。
+  - **驗證方式**: 單元測試 `cargo test -p duplicate-finder`（1,000 筆資料分群時間 < 100ms，實際 ~20ms）。
   - **預估規模**: M (3-4 檔案)
 
 - [ ] Task 4.2: 實作重複圖片檢查器 GUI 面板與安全刪除
