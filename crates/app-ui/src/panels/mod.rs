@@ -1,6 +1,11 @@
 use egui::{menu, Color32, Margin, RichText, Rounding, SidePanel, Stroke, TopBottomPanel};
 use crate::theme::ThemeColors;
 
+pub mod duplicate_dialog;
+pub use duplicate_dialog::{
+    DuplicateFinderDialog, DuplicateFinderState, DuplicateGroupUi, DuplicateItemUi, DuplicateMode,
+};
+
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -11,6 +16,7 @@ pub enum MenuAction {
     Redo,
     Reset100,
     ResetFit,
+    DuplicateFinder,
     About,
 }
 
@@ -101,7 +107,8 @@ impl MenuBar {
                     });
 
                     ui.menu_button("工具 (Tools)", |ui| {
-                        if ui.button("👥 重複圖片檢查器 (Duplicate Finder)").clicked() {
+                        if ui.button("👥 重複圖片檢查器 (Duplicate Finder)...").clicked() {
+                            triggered_action = Some(MenuAction::DuplicateFinder);
                             ui.close_menu();
                         }
                     });

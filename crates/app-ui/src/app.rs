@@ -8,7 +8,10 @@ use viewer_state::{EditingSession, ViewportState};
 
 use crate::canvas::{CanvasState, CanvasView, ComparisonAction, ComparisonConfig, ComparisonSource};
 use crate::debounce_queue::AdjustmentDebouncer;
-use crate::panels::{AboutDialog, AdjustmentPanel, FilmstripPanel, MenuBar, StatusBar};
+use crate::panels::{
+    AboutDialog, AdjustmentPanel, DuplicateFinderDialog, DuplicateFinderState, FilmstripPanel,
+    MenuBar, StatusBar,
+};
 use crate::playlist::ImagePlaylist;
 use crate::theme::apply_theme;
 use crate::thumbnail_loader::ThumbnailManager;
@@ -25,6 +28,8 @@ pub struct ImageViewerApp {
     pub show_filmstrip: bool,
     /// 關於對話框顯示開關
     pub show_about_dialog: bool,
+    /// 重複圖片檢查器狀態
+    pub duplicate_finder_state: DuplicateFinderState,
     /// GPU 影像紋理快取
     pub texture: Option<TextureHandle>,
     /// 目前上傳到 GPU 紋理的底層影像指標，用於避免重複上傳
@@ -59,6 +64,7 @@ impl Default for ImageViewerApp {
             show_side_panel: true,
             show_filmstrip: true,
             show_about_dialog: false,
+            duplicate_finder_state: DuplicateFinderState::default(),
             texture: None,
             last_texture_ptr: 0,
             playlist: ImagePlaylist::new(),
@@ -472,6 +478,10 @@ impl eframe::App for ImageViewerApp {
                 crate::panels::MenuAction::Redo => self.redo(),
                 crate::panels::MenuAction::Reset100 => self.viewport.reset_actual_size(),
                 crate::panels::MenuAction::ResetFit => self.viewport.reset_fit_window(),
+                crate::panels::MenuAction::DuplicateFinder => {
+                    let cur_dir = self.session.as_ref().and_then(|s| s.source_path()).and_then(|p| p.parent()).map(|p| p.to_path_buf());
+                    self.duplicate_finder_state.open_with_dir(cur_dir);
+                }
                 crate::panels::MenuAction::About => self.show_about_dialog = true,
             }
         }
@@ -624,5 +634,10 @@ impl eframe::App for ImageViewerApp {
 
         // 10. 關於 Rust Image Viewer 彈窗
         AboutDialog::show(ctx, &mut self.show_about_dialog);
+
+        // 11. 重複圖片檢查器彈窗
+        if let Some(target_path) = DuplicateFinderDialog::show(ctx, &mut self.duplicate_finder_state) {
+            let _ = self.open_image_path(target_path);
+        }
     }
 }
