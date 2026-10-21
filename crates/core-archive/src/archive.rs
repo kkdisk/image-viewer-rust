@@ -57,8 +57,16 @@ pub struct ManagedArchiveSession {
 }
 
 impl ManagedArchiveSession {
-    /// 開啟並安全解壓縮檔案至獨立暫存目錄
+    /// 開啟並安全解壓縮檔案至獨立暫存目錄（預設無密碼）
     pub fn open<P: AsRef<Path>>(archive_path: P) -> Result<Self, ArchiveError> {
+        Self::open_with_password(archive_path, None)
+    }
+
+    /// 支援密碼保護之安全解壓縮流程
+    pub fn open_with_password<P: AsRef<Path>>(
+        archive_path: P,
+        password: Option<&str>,
+    ) -> Result<Self, ArchiveError> {
         let path = archive_path.as_ref();
         if !path.exists() {
             return Err(ArchiveError::Io(io::Error::new(
@@ -81,10 +89,10 @@ impl ManagedArchiveSession {
 
         match ext.as_str() {
             "zip" => {
-                extract_zip(path, temp_dir.path(), &mut image_paths)?;
+                extract_zip(path, temp_dir.path(), password, &mut image_paths)?;
             }
             "7z" => {
-                extract_7z(path, temp_dir.path(), &mut image_paths)?;
+                extract_7z(path, temp_dir.path(), password, &mut image_paths)?;
             }
             _ => {
                 return Err(ArchiveError::UnsupportedFormat(format!(
@@ -114,10 +122,11 @@ impl ManagedArchiveSession {
     }
 }
 
-/// 安全解壓 ZIP 檔案
+/// 安全解壓 ZIP 檔案（支援密碼）
 fn extract_zip(
     archive_path: &Path,
     dest_dir: &Path,
+    password: Option<&str>,
     image_paths: &mut Vec<PathBuf>,
 ) -> Result<(), ArchiveError> {
     let file = File::open(archive_path)?;
@@ -126,9 +135,24 @@ fn extract_zip(
         .map_err(|e| ArchiveError::Zip(e.to_string()))?;
 
     for i in 0..zip.len() {
-        let mut file = zip
-            .by_index(i)
-            .map_err(|e| ArchiveError::Zip(e.to_string()))?;
+        let mut file = match password {
+            Some(pwd) if !pwd.is_empty() => match zip.by_index_decrypt(i, pwd.as_bytes()) {
+                Ok(f) => f,
+                Err(zip::result::ZipError::InvalidPassword) => {
+                    return Err(ArchiveError::InvalidPassword);
+                }
+                Err(e) => return Err(ArchiveError::Zip(e.to_string())),
+            },
+            _ => {
+                let f = zip
+                    .by_index(i)
+                    .map_err(|e| ArchiveError::Zip(e.to_string()))?;
+                if f.encrypted() {
+                    return Err(ArchiveError::PasswordRequired);
+                }
+                f
+            }
+        };
 
         // 優先使用 enclosed_name 檢查路徑安全
         let rel_path = match file.enclosed_name() {
@@ -161,56 +185,45 @@ fn extract_zip(
     Ok(())
 }
 
-/// 安全解壓 7Z 檔案
+/// 安全解壓 7Z 檔案（支援密碼）
 fn extract_7z(
     archive_path: &Path,
     dest_dir: &Path,
+    password: Option<&str>,
     image_paths: &mut Vec<PathBuf>,
 ) -> Result<(), ArchiveError> {
-    // 使用 sevenz-rust 解壓，並逐一安全過濾圖片檔案
-    sevenz_rust::decompress_file_with_extract_fn(
-        archive_path,
-        dest_dir,
-        |entry, reader, target_dir| {
+    let pwd = match password {
+        Some(p) if !p.is_empty() => sevenz_rust::Password::from(p),
+        _ => sevenz_rust::Password::empty(),
+    };
+
+    let mut reader = sevenz_rust::SevenZReader::open(archive_path, pwd)
+        .map_err(ArchiveError::from_sevenz)?;
+
+    reader
+        .for_each_entries(|entry, read| {
             let rel_path = sanitize_archive_path(entry.name())
                 .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e.to_string()))?;
 
             if entry.is_directory() {
-                let dir_path = target_dir.join(&rel_path);
+                let dir_path = dest_dir.join(&rel_path);
                 fs::create_dir_all(&dir_path)?;
                 return Ok(true);
             }
 
             if is_image_extension(&rel_path) {
-                let file_path = target_dir.join(&rel_path);
+                let file_path = dest_dir.join(&rel_path);
                 if let Some(parent) = file_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
                 let mut out_file = File::create(&file_path)?;
-                io::copy(reader, &mut out_file)?;
+                io::copy(read, &mut out_file)?;
+                image_paths.push(file_path);
             }
 
             Ok(true)
-        },
-    )
-    .map_err(|e| ArchiveError::SevenZ(e.to_string()))?;
-
-    // 掃描 dest_dir 收集所有解壓完成之圖片
-    collect_extracted_images(dest_dir, image_paths);
+        })
+        .map_err(ArchiveError::from_sevenz)?;
 
     Ok(())
-}
-
-/// 遞迴收集解壓目錄中的圖片檔案
-fn collect_extracted_images(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                collect_extracted_images(&p, out);
-            } else if p.is_file() && is_image_extension(&p) {
-                out.push(p);
-            }
-        }
-    }
 }

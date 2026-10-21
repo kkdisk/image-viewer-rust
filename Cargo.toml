@@ -23,7 +23,7 @@ anyhow = "1.0"
 kamadak-exif = "0.5"
 md-5 = "0.10"
 trash = "5.2"
-sevenz-rust = "0.6"
+sevenz-rust = { version = "0.6", features = ["aes256"] }
 zip = "2.2"
 tempfile = "3.13"
 rfd = "0.15"

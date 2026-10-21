@@ -56,6 +56,18 @@ pub struct ImageViewerApp {
     pub reference_texture: Option<TextureHandle>,
     /// 受管理的壓縮檔瀏覽 Session
     pub archive_session: Option<core_archive::ManagedArchiveSession>,
+    /// 待解密之壓縮檔路徑
+    pub pending_archive_path: Option<PathBuf>,
+    /// 壓縮檔解密密碼輸入緩衝
+    pub archive_password_input: String,
+    /// 密碼錯誤或解壓錯誤提示
+    pub archive_password_error: Option<String>,
+    /// 是否以明文顯示密碼
+    pub archive_show_password: bool,
+    /// 是否顯示密碼輸入彈出視窗
+    pub show_password_dialog: bool,
+    /// 全域通知訊息與產生時間戳記 (訊息, 產生時間)
+    pub status_notification: Option<(String, std::time::Instant)>,
 }
 
 impl Default for ImageViewerApp {
@@ -80,6 +92,12 @@ impl Default for ImageViewerApp {
             reference_image: None,
             reference_texture: None,
             archive_session: None,
+            pending_archive_path: None,
+            archive_password_input: String::new(),
+            archive_password_error: None,
+            archive_show_password: false,
+            show_password_dialog: false,
+            status_notification: None,
         }
     }
 }
@@ -101,22 +119,39 @@ impl ImageViewerApp {
             .unwrap_or_default();
 
         if ext == "zip" || ext == "7z" {
-            let session = core_archive::ManagedArchiveSession::open(&path)
-                .map_err(|e| format!("無法開啟壓縮檔: {}", e))?;
-
-            let first_img = session
-                .image_paths
-                .first()
-                .cloned()
-                .ok_or_else(|| "壓縮檔內未找到支援的圖片".to_string())?;
-
-            self.playlist.set_custom_list(session.image_paths.clone());
-            self.thumbnail_manager.clear();
-            self.archive_session = Some(session);
-
-            self.open_image_path(first_img)
-                .map_err(|e| format!("無法載入壓縮檔內圖片: {}", e))?;
-            Ok(())
+            // 先嘗試無密碼解壓
+            match core_archive::ManagedArchiveSession::open_with_password(&path, None) {
+                Ok(session) => {
+                    let count = session.image_paths.len();
+                    self.apply_archive_session(session)?;
+                    self.pending_archive_path = None;
+                    self.show_password_dialog = false;
+                    self.archive_password_error = None;
+                    self.status_notification = Some((
+                        format!("已載入壓縮檔 (共 {} 張圖片)", count),
+                        std::time::Instant::now(),
+                    ));
+                    Ok(())
+                }
+                Err(core_archive::ArchiveError::PasswordRequired)
+                | Err(core_archive::ArchiveError::InvalidPassword) => {
+                    // 該壓縮檔受密碼保護，彈出密碼輸入彈窗
+                    self.pending_archive_path = Some(path);
+                    self.archive_password_input.clear();
+                    self.archive_password_error = None;
+                    self.show_password_dialog = true;
+                    self.status_notification = Some((
+                        "此壓縮檔受密碼保護，請輸入解鎖密碼".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                    Ok(())
+                }
+                Err(e) => {
+                    let msg = format!("無法開啟壓縮檔: {}", e);
+                    self.status_notification = Some((msg.clone(), std::time::Instant::now()));
+                    Err(msg)
+                }
+            }
         } else {
             // 若為一般圖片檔案
             let is_in_archive = self
@@ -132,6 +167,59 @@ impl ImageViewerApp {
             self.open_image_path(path)
                 .map_err(|e| format!("無法載入圖片: {}", e))
         }
+    }
+
+    /// 使用指定密碼解壓並開啟壓縮檔
+    pub fn open_archive_with_password(
+        &mut self,
+        path: PathBuf,
+        password: &str,
+    ) -> Result<(), String> {
+        match core_archive::ManagedArchiveSession::open_with_password(&path, Some(password)) {
+            Ok(session) => {
+                let count = session.image_paths.len();
+                self.apply_archive_session(session)?;
+                self.pending_archive_path = None;
+                self.archive_password_input.clear();
+                self.archive_password_error = None;
+                self.show_password_dialog = false;
+                self.status_notification = Some((
+                    format!("解密成功！已載入 {} 張圖片", count),
+                    std::time::Instant::now(),
+                ));
+                Ok(())
+            }
+            Err(core_archive::ArchiveError::InvalidPassword)
+            | Err(core_archive::ArchiveError::PasswordRequired) => {
+                self.archive_password_error = Some("密碼錯誤或解密失敗，請重新輸入".to_string());
+                Err("密碼錯誤".to_string())
+            }
+            Err(e) => {
+                let msg = format!("解壓失敗: {}", e);
+                self.archive_password_error = Some(msg.clone());
+                Err(msg)
+            }
+        }
+    }
+
+    /// 套用已解壓完成之壓縮檔 Session 至播放清單與首張圖片檢視
+    pub fn apply_archive_session(
+        &mut self,
+        session: core_archive::ManagedArchiveSession,
+    ) -> Result<(), String> {
+        let first_img = session
+            .image_paths
+            .first()
+            .cloned()
+            .ok_or_else(|| "壓縮檔內未找到支援的圖片".to_string())?;
+
+        self.playlist.set_custom_list(session.image_paths.clone());
+        self.thumbnail_manager.clear();
+        self.archive_session = Some(session);
+
+        self.open_image_path(first_img)
+            .map_err(|e| format!("無法載入壓縮檔內圖片: {}", e))?;
+        Ok(())
     }
 
     /// 開啟指定路徑之影像，並視情況維護播放清單
@@ -177,8 +265,10 @@ impl ImageViewerApp {
             .add_filter("所有檔案 (*.*)", &["*"])
             .pick_file();
 
-        if let Some(path) = file {
-            let _ = self.open_file_path(path);
+        if let Some(path) = file
+            && let Err(e) = self.open_file_path(path)
+        {
+            self.status_notification = Some((e, std::time::Instant::now()));
         }
     }
 
@@ -521,11 +611,14 @@ impl eframe::App for ImageViewerApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
         // 1. 處理全域檔案拖曳放入
-        ctx.input(|i| {
-            if let Some(path) = i.raw.dropped_files.first().and_then(|d| d.path.as_ref()) {
-                let _ = self.open_file_path(path.clone());
-            }
+        let dropped_file = ctx.input(|i| {
+            i.raw.dropped_files.first().and_then(|d| d.path.clone())
         });
+        if let Some(path) = dropped_file
+            && let Err(e) = self.open_file_path(path)
+        {
+            self.status_notification = Some((e, std::time::Instant::now()));
+        }
 
         // 2. 處理鍵盤快捷鍵
         self.handle_shortcuts(ctx);
@@ -590,6 +683,16 @@ impl eframe::App for ImageViewerApp {
 
         let playlist_info = self.playlist.current_index().map(|idx| (idx, self.playlist.len()));
 
+        let status_msg = if let Some((msg, ts)) = &self.status_notification {
+            if ts.elapsed().as_secs() < 8 {
+                Some(msg.as_str())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         StatusBar::show(
             ctx,
             filename,
@@ -597,6 +700,7 @@ impl eframe::App for ImageViewerApp {
             self.viewport.zoom,
             is_dirty,
             playlist_info,
+            status_msg,
         );
 
         // 7. 底部 Filmstrip 縮圖列
@@ -727,6 +831,38 @@ impl eframe::App for ImageViewerApp {
         // 11. 重複圖片檢查器彈窗
         if let Some(target_path) = DuplicateFinderDialog::show(ctx, &mut self.duplicate_finder_state) {
             let _ = self.open_image_path(target_path);
+        }
+
+        // 12. 壓縮檔密碼輸入彈窗
+        if self.show_password_dialog {
+            if let Some(archive_path) = self.pending_archive_path.clone() {
+                let mut is_open = self.show_password_dialog;
+                let action = crate::panels::ArchivePasswordDialog::new(
+                    &archive_path,
+                    &mut self.archive_password_input,
+                    self.archive_password_error.as_deref(),
+                    &mut self.archive_show_password,
+                    &mut is_open,
+                )
+                .show(ctx);
+
+                self.show_password_dialog = is_open;
+
+                match action {
+                    crate::panels::ArchivePasswordAction::Confirm(pwd) => {
+                        let _ = self.open_archive_with_password(archive_path, &pwd);
+                    }
+                    crate::panels::ArchivePasswordAction::Cancel => {
+                        self.show_password_dialog = false;
+                        self.pending_archive_path = None;
+                        self.archive_password_input.clear();
+                        self.archive_password_error = None;
+                    }
+                    crate::panels::ArchivePasswordAction::None => {}
+                }
+            } else {
+                self.show_password_dialog = false;
+            }
         }
     }
 }

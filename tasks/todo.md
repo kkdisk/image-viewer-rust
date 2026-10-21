@@ -90,12 +90,12 @@
   - **預估規模**: L (5-6 檔案)
 
 - [x] Task 4.3: 實作 `core-archive` 壓縮檔安全讀取與 Filmstrip 整合
-  - **驗收條件**: 支援 7z / zip 格式；防範 Path Traversal；解壓至受管理暫存目錄並自動列入導覽；壓縮檔內圖片禁用覆寫。
-  - **驗證方式**: 單元測試 `cargo test -p core-archive` 與 `cargo test -p app-ui --test archive_ui_test` 驗證路徑安全防護與覆寫阻斷。
+  - **驗收條件**: 支援 7z / zip 格式；啟用 `sevenz-rust` 之 `aes256` feature 完整支援密碼保護 7z；防範 Path Traversal；解壓至受管理暫存目錄並自動列入導覽；壓縮檔內圖片禁用覆寫；開啟失敗或需要密碼時主動彈出密碼對話框與狀態列反饋。
+  - **驗證方式**: 單元測試 `cargo test -p core-archive` 與 `cargo test -p app-ui --test archive_ui_test` 驗證路徑安全防護、7z 密碼解密流程與覆寫阻斷（全工作區 28 項測試全數通過）。
   - **預估規模**: M (3-4 檔案)
 
 ### Checkpoint 4: 查重與壓縮包檢查點
-- [x] 大批檔案查重與清理功能正常運作，壓縮檔預覽流暢且安全邊界完整（全工作區 26 項測試綠燈全數通過）。
+- [x] 大批檔案查重與清理功能正常運作，壓縮檔（含密碼保護 7z/zip）預覽流暢且安全邊界完整（全工作區 28 項測試綠燈全數通過）。
 
 ---
 

@@ -106,3 +106,58 @@ fn test_archive_with_no_images_fails() {
     let res = ManagedArchiveSession::open(&zip_path);
     assert!(matches!(res, Err(ArchiveError::NoImagesFound)));
 }
+
+#[test]
+fn test_7z_with_password() {
+    let seven_zip_exe = std::path::Path::new(r"C:\Program Files\7-Zip\7z.exe");
+    if !seven_zip_exe.exists() {
+        return;
+    }
+
+    let temp_dir = tempdir().unwrap();
+    let img_path = temp_dir.path().join("photo.png");
+
+    let img = ImageBuffer::from_pixel(16, 16, Rgba([0u8, 255u8, 0u8, 255u8]));
+    img.save(&img_path).unwrap();
+
+    let archive_path = temp_dir.path().join("secure.7z");
+
+    let status = std::process::Command::new(seven_zip_exe)
+        .arg("a")
+        .arg(&archive_path)
+        .arg(&img_path)
+        .arg("-prust_pass_456")
+        .arg("-mhe=on")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    // 1. 未提供密碼 -> 應回傳 PasswordRequired 或 InvalidPassword
+    let res_no_pwd = ManagedArchiveSession::open(&archive_path);
+    assert!(
+        matches!(
+            res_no_pwd,
+            Err(ArchiveError::PasswordRequired | ArchiveError::InvalidPassword)
+        ),
+        "未提供密碼應回傳密碼要求，實際為: {:?}",
+        res_no_pwd.err()
+    );
+
+    // 2. 錯誤密碼 -> 應回傳 InvalidPassword
+    let res_wrong = ManagedArchiveSession::open_with_password(&archive_path, Some("wrong_pass"));
+    assert!(
+        matches!(
+            res_wrong,
+            Err(ArchiveError::InvalidPassword | ArchiveError::PasswordRequired)
+        ),
+        "錯誤密碼應回傳密碼錯誤，實際為: {:?}",
+        res_wrong.err()
+    );
+
+    // 3. 正確密碼 -> 解壓成功
+    let res_ok = ManagedArchiveSession::open_with_password(&archive_path, Some("rust_pass_456"));
+    assert!(res_ok.is_ok(), "正確密碼解密失敗: {:?}", res_ok.err());
+    let session = res_ok.unwrap();
+    assert_eq!(session.image_paths.len(), 1);
+    assert!(session.image_paths[0].exists());
+}

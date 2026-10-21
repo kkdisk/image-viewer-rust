@@ -80,3 +80,53 @@ fn test_app_archive_open_navigation_and_save_protection() {
     let current_bytes_len = std::fs::read(&current_path).unwrap().len();
     assert_eq!(original_bytes_len, current_bytes_len, "原壓縮檔解壓之檔案絕對不能被直接原地變更！");
 }
+
+#[test]
+fn test_app_encrypted_7z_flow() {
+    let seven_zip_exe = std::path::Path::new(r"C:\Program Files\7-Zip\7z.exe");
+    if !seven_zip_exe.exists() {
+        return;
+    }
+
+    let temp_dir = tempdir().unwrap();
+    let img_path = temp_dir.path().join("secret_art.png");
+
+    let img = ImageBuffer::from_pixel(16, 16, Rgba([100u8, 150u8, 200u8, 255u8]));
+    img.save(&img_path).unwrap();
+
+    let archive_path = temp_dir.path().join("locked_gallery.7z");
+
+    let status = std::process::Command::new(seven_zip_exe)
+        .arg("a")
+        .arg(&archive_path)
+        .arg(&img_path)
+        .arg("-pmy_top_secret")
+        .arg("-mhe=on")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let mut app = app_ui::app::ImageViewerApp::default();
+
+    // 1. 初次無密碼開啟 -> 應觸發密碼輸入對話框
+    let open_res = app.open_file_path(archive_path.clone());
+    assert!(open_res.is_ok());
+    assert!(app.show_password_dialog, "加密壓縮檔應彈出密碼輸入視窗");
+    assert_eq!(app.pending_archive_path.as_ref(), Some(&archive_path));
+    assert!(app.archive_session.is_none());
+
+    // 2. 模擬輸入錯誤密碼
+    let wrong_res = app.open_archive_with_password(archive_path.clone(), "wrong_password");
+    assert!(wrong_res.is_err());
+    assert!(app.archive_password_error.is_some());
+    assert!(app.show_password_dialog, "密碼錯誤時對話框應保持開啟");
+
+    // 3. 模擬輸入正確密碼
+    let correct_res = app.open_archive_with_password(archive_path, "my_top_secret");
+    assert!(correct_res.is_ok(), "正確密碼解鎖失敗: {:?}", correct_res.err());
+    assert!(!app.show_password_dialog, "解鎖成功後密碼對話框應關閉");
+    assert!(app.archive_session.is_some());
+    assert_eq!(app.playlist.len(), 1);
+    assert!(app.session.is_some());
+    assert!(app.is_current_image_from_archive());
+}

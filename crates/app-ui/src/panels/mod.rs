@@ -6,6 +6,9 @@ pub use duplicate_dialog::{
     DuplicateFinderDialog, DuplicateFinderState, DuplicateGroupUi, DuplicateItemUi, DuplicateMode,
 };
 
+pub mod archive_dialog;
+pub use archive_dialog::{ArchivePasswordAction, ArchivePasswordDialog};
+
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -212,11 +215,22 @@ impl StatusBar {
         zoom_pct: f32,
         is_dirty: bool,
         playlist_info: Option<(usize, usize)>,
+        status_msg: Option<&str>,
     ) {
         TopBottomPanel::bottom("bottom_status_bar")
             .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::symmetric(12.0, 4.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    // 即時狀態或通知訊息
+                    if let Some(msg) = status_msg {
+                        ui.label(
+                            RichText::new(format!("📢 {}", msg))
+                                .strong()
+                                .color(ThemeColors::ACCENT_HOVER),
+                        );
+                        ui.separator();
+                    }
+
                     // 檔案清單進度序號
                     if let Some((curr, total)) = playlist_info {
                         ui.label(
