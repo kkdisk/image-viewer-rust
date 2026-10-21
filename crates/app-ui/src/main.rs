@@ -1,3 +1,26 @@
-﻿fn main() {
-    println!("Rust Image Viewer initialized!");
+//! Rust Image Viewer 桌面主程式進入點
+
+mod app;
+mod canvas;
+mod panels;
+mod theme;
+
+use app::ImageViewerApp;
+use eframe::egui;
+
+fn main() -> eframe::Result<()> {
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Rust Image Viewer")
+            .with_inner_size([1280.0, 800.0])
+            .with_min_inner_size([800.0, 600.0])
+            .with_active(true),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Rust Image Viewer",
+        native_options,
+        Box::new(|cc| Ok(Box::new(ImageViewerApp::new(cc)))),
+    )
 }
