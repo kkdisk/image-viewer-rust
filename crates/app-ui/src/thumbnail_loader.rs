@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
-use image::{imageops::FilterType, RgbaImage};
+use image::RgbaImage;
 
 /// 縮圖預設高寬像素大小
 pub const THUMBNAIL_SIZE: u32 = 80;
@@ -44,9 +44,13 @@ impl ThumbnailManager {
 
         let worker_pending = Arc::clone(&pending_paths);
 
-        // 啟動專屬背景背景工作執行緒池（2 個工作執行緒）
+        // 依據可用 CPU 核心數動態配置背景解碼執行緒池（至少 4 個，最高 16 個）
+        let num_workers = thread::available_parallelism()
+            .map(|n| n.get().clamp(4, 16))
+            .unwrap_or(4);
+
         let task_receiver = Arc::new(Mutex::new(task_receiver));
-        for _ in 0..2 {
+        for _ in 0..num_workers {
             let rx = Arc::clone(&task_receiver);
             let tx = result_sender.clone();
             let pending = Arc::clone(&worker_pending);
@@ -56,13 +60,9 @@ impl ThumbnailManager {
                     let lock = rx.lock().unwrap();
                     lock.recv()
                 } {
-                    // 自磁碟解碼並縮圖
+                    // 自磁碟解碼並使用高速整數下採樣 thumbnail 演算法
                     if let Ok(dyn_img) = core_image::load_image(&path) {
-                        let thumb = dyn_img.resize_to_fill(
-                            THUMBNAIL_SIZE,
-                            THUMBNAIL_SIZE,
-                            FilterType::Triangle,
-                        );
+                        let thumb = dyn_img.thumbnail(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
                         let rgba = thumb.to_rgba8();
                         let _ = tx.send(ThumbnailResult {
                             path: path.clone(),
@@ -86,8 +86,9 @@ impl ThumbnailManager {
         }
     }
 
-    /// 輪詢並接收後台已完成的縮圖，上傳至 egui GPU 紋理
+    /// 輪詢並接收後台已完成的縮圖，上傳至 egui GPU 紋理，並請求畫面重繪
     pub fn poll_results(&mut self, ctx: &egui::Context) {
+        let mut any_new = false;
         while let Ok(res) = self.receiver.try_recv() {
             let size = [res.image.width() as usize, res.image.height() as usize];
             let color_img = ColorImage::from_rgba_unmultiplied(size, res.image.as_raw());
@@ -97,7 +98,17 @@ impl ThumbnailManager {
                 TextureOptions::LINEAR,
             );
             self.textures.insert(res.path, handle);
+            any_new = true;
         }
+
+        if any_new {
+            ctx.request_repaint();
+        }
+    }
+
+    /// 查詢記憶體中已就緒的快取紋理（若未就緒不發起磁碟載入，用於視口外卡片）
+    pub fn get_cached(&self, path: &Path) -> Option<&TextureHandle> {
+        self.textures.get(path)
     }
 
     /// 取得指定路徑的 GPU 縮圖紋理；若尚未載入則向後台提交請求
@@ -108,7 +119,7 @@ impl ThumbnailManager {
 
         // 若尚未在 pending 佇列中，發送至背景載入
         let should_request = if let Ok(mut set) = self.pending_paths.lock() {
-            if set.len() < 300 && !set.contains(path) {
+            if set.len() < 500 && !set.contains(path) {
                 set.insert(path.to_path_buf());
                 true
             } else {

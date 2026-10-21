@@ -493,8 +493,21 @@ impl FilmstripPanel {
                                 };
                                 ui.painter().rect_filled(rect, Rounding::same(4.0), bg_color);
 
-                                // 取得或請求縮圖
-                                if let Some(tex) = thumbnail_mgr.get_or_request(path) {
+                                // 取得或請求縮圖：僅當可見或處於目前鄰近範圍內時優先向後台發起載入，其餘僅查快取
+                                let is_visible = ui.is_rect_visible(rect);
+                                let is_near = if let Some(c) = curr_idx {
+                                    (idx as isize - c as isize).abs() <= 10
+                                } else {
+                                    idx < 15
+                                };
+
+                                let tex_opt = if is_visible || is_near {
+                                    thumbnail_mgr.get_or_request(path)
+                                } else {
+                                    thumbnail_mgr.get_cached(path)
+                                };
+
+                                if let Some(tex) = tex_opt {
                                     let inner_margin = 4.0;
                                     let img_rect = Rect::from_min_max(
                                         pos2(rect.left() + inner_margin, rect.top() + inner_margin),
