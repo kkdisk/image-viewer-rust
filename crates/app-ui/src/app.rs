@@ -175,10 +175,23 @@ impl ImageViewerApp {
         path: PathBuf,
         password: &str,
     ) -> Result<(), String> {
-        match core_archive::ManagedArchiveSession::open_with_password(&path, Some(password)) {
+        // 先嘗試原始輸入密碼，若失敗且 trim 後內容不同，再嘗試 trim 後密碼
+        let mut res = core_archive::ManagedArchiveSession::open_with_password(&path, Some(password));
+        if res.is_err() && password.trim() != password {
+            let trimmed = password.trim();
+            if !trimmed.is_empty() {
+                res = core_archive::ManagedArchiveSession::open_with_password(&path, Some(trimmed));
+            }
+        }
+
+        match res {
             Ok(session) => {
                 let count = session.image_paths.len();
-                self.apply_archive_session(session)?;
+                if let Err(e) = self.apply_archive_session(session) {
+                    let msg = format!("解壓完成但載入首張圖片失敗: {}", e);
+                    self.archive_password_error = Some(msg.clone());
+                    return Err(msg);
+                }
                 self.pending_archive_path = None;
                 self.archive_password_input.clear();
                 self.archive_password_error = None;
@@ -191,7 +204,7 @@ impl ImageViewerApp {
             }
             Err(core_archive::ArchiveError::InvalidPassword)
             | Err(core_archive::ArchiveError::PasswordRequired) => {
-                self.archive_password_error = Some("密碼錯誤或解密失敗，請重新輸入".to_string());
+                self.archive_password_error = Some("密碼錯誤或解密失敗，請檢查密碼".to_string());
                 Err("密碼錯誤".to_string())
             }
             Err(e) => {

@@ -81,33 +81,58 @@ impl<'a> ArchivePasswordDialog<'a> {
 
                     ui.add_space(10.0);
 
-                    // 密碼輸入框
-                    let is_mask = !*self.show_password_char;
-                    let text_edit = TextEdit::singleline(self.password_input)
-                        .password(is_mask)
-                        .hint_text("請輸入解鎖密碼...")
-                        .desired_width(f32::INFINITY);
+                    // 密碼輸入框與切換顯示
+                    ui.horizontal(|ui| {
+                        let is_mask = !*self.show_password_char;
+                        let text_edit = TextEdit::singleline(self.password_input)
+                            .password(is_mask)
+                            .hint_text("請輸入解鎖密碼...")
+                            .desired_width(ui.available_width() - 32.0);
 
-                    let res = ui.add(text_edit);
-                    // 第一次打開時自動聚焦至密碼輸入框
-                    if !res.has_focus() && self.password_input.is_empty() {
-                        res.request_focus();
-                    }
+                        let res = ui.add(text_edit);
+                        if self.password_input.is_empty() && !res.has_focus() {
+                            res.request_focus();
+                        }
 
-                    // 檢測按下 Enter 鍵確認
-                    let enter_pressed = res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        // 按下 Enter 鍵直接觸發解鎖
+                        if res.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            action = ArchivePasswordAction::Confirm(self.password_input.clone());
+                        }
+
+                        // 快速切換顯示/隱藏眼睛按鈕
+                        let eye_icon = if *self.show_password_char { "👁" } else { "🔒" };
+                        if ui.small_button(eye_icon).on_hover_text("切換顯示/隱藏密碼").clicked() {
+                            *self.show_password_char = !*self.show_password_char;
+                        }
+                    });
 
                     ui.add_space(4.0);
 
-                    // 顯示/隱藏密碼核取方塊
-                    ui.checkbox(self.show_password_char, "顯示密碼文字");
+                    // 密碼長度與狀態輔助提示
+                    ui.horizontal(|ui| {
+                        ui.checkbox(self.show_password_char, "顯示密碼文字");
 
-                    // 錯誤訊息提示
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let len = self.password_input.chars().count();
+                            let color = if len > 0 {
+                                ThemeColors::ACCENT_HOVER
+                            } else {
+                                Color32::from_rgb(140, 140, 150)
+                            };
+                            ui.label(
+                                RichText::new(format!("長度: {} 字元", len))
+                                    .size(11.0)
+                                    .color(color),
+                            );
+                        });
+                    });
+
+                    // 錯誤訊息提示（使用純色塊與無豆腐塊文字）
                     if let Some(err) = self.password_error {
                         ui.add_space(6.0);
                         ui.label(
-                            RichText::new(format!("⚠️ {}", err))
-                                .color(Color32::from_rgb(255, 90, 90))
+                            RichText::new(format!("● {}", err))
+                                .color(Color32::from_rgb(255, 95, 95))
                                 .strong(),
                         );
                     }
@@ -140,7 +165,7 @@ impl<'a> ArchivePasswordDialog<'a> {
                                 .rounding(Rounding::same(4.0)),
                             );
 
-                            if confirm_btn.clicked() || enter_pressed {
+                            if confirm_btn.clicked() {
                                 action = ArchivePasswordAction::Confirm(self.password_input.clone());
                             } else if cancel_btn.clicked() {
                                 action = ArchivePasswordAction::Cancel;

@@ -198,7 +198,10 @@ fn extract_7z(
     };
 
     let mut reader = sevenz_rust::SevenZReader::open(archive_path, pwd)
-        .map_err(ArchiveError::from_sevenz)?;
+        .map_err(|e| {
+            eprintln!("[SevenZReader::open error]: {:?}", e);
+            ArchiveError::from_sevenz(e)
+        })?;
 
     reader
         .for_each_entries(|entry, read| {
@@ -219,6 +222,10 @@ fn extract_7z(
                 let mut out_file = File::create(&file_path)?;
                 io::copy(read, &mut out_file)?;
                 image_paths.push(file_path);
+            } else {
+                // 固實壓縮 (Solid Archive) 必須完整消費未使用的 entry 資料流
+                // 否則後續 entry 的串流偏移量錯位將觸發 ChecksumVerificationFailed
+                io::copy(read, &mut io::sink())?;
             }
 
             Ok(true)
