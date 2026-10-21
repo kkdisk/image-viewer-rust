@@ -8,7 +8,7 @@ use viewer_state::{EditingSession, ViewportState};
 
 use crate::canvas::{CanvasState, CanvasView, ComparisonAction, ComparisonConfig, ComparisonSource};
 use crate::debounce_queue::AdjustmentDebouncer;
-use crate::panels::{AdjustmentPanel, FilmstripPanel, MenuBar, StatusBar};
+use crate::panels::{AboutDialog, AdjustmentPanel, FilmstripPanel, MenuBar, StatusBar};
 use crate::playlist::ImagePlaylist;
 use crate::theme::apply_theme;
 use crate::thumbnail_loader::ThumbnailManager;
@@ -23,6 +23,8 @@ pub struct ImageViewerApp {
     pub show_side_panel: bool,
     /// 底部縮圖列開關
     pub show_filmstrip: bool,
+    /// 關於對話框顯示開關
+    pub show_about_dialog: bool,
     /// GPU 影像紋理快取
     pub texture: Option<TextureHandle>,
     /// 目前上傳到 GPU 紋理的底層影像指標，用於避免重複上傳
@@ -56,6 +58,7 @@ impl Default for ImageViewerApp {
             viewport: ViewportState::new(),
             show_side_panel: true,
             show_filmstrip: true,
+            show_about_dialog: false,
             texture: None,
             last_texture_ptr: 0,
             playlist: ImagePlaylist::new(),
@@ -469,6 +472,7 @@ impl eframe::App for ImageViewerApp {
                 crate::panels::MenuAction::Redo => self.redo(),
                 crate::panels::MenuAction::Reset100 => self.viewport.reset_actual_size(),
                 crate::panels::MenuAction::ResetFit => self.viewport.reset_fit_window(),
+                crate::panels::MenuAction::About => self.show_about_dialog = true,
             }
         }
 
@@ -617,5 +621,8 @@ impl eframe::App for ImageViewerApp {
                     None => {}
                 }
             });
+
+        // 10. 關於 Rust Image Viewer 彈窗
+        AboutDialog::show(ctx, &mut self.show_about_dialog);
     }
 }

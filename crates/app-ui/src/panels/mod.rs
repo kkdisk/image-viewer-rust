@@ -1,4 +1,4 @@
-use egui::{menu, Margin, RichText, SidePanel, TopBottomPanel};
+use egui::{menu, Color32, Margin, RichText, Rounding, SidePanel, Stroke, TopBottomPanel};
 use crate::theme::ThemeColors;
 
 /// 選單觸發之動作
@@ -11,6 +11,7 @@ pub enum MenuAction {
     Redo,
     Reset100,
     ResetFit,
+    About,
 }
 
 /// 選單狀態與切換開關
@@ -33,6 +34,19 @@ impl MenuBar {
         TopBottomPanel::top("top_menu_bar")
             .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::symmetric(10.0, 4.0)))
             .show(ctx, |ui| {
+                // 自訂頂部選單列專屬樣式：高對比清晰文字、平時透明底、平滑懸停底色
+                let menu_style = ui.style_mut();
+                menu_style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                menu_style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+                menu_style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(235, 235, 242));
+                menu_style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 45, 52);
+                menu_style.visuals.widgets.hovered.bg_stroke = Stroke::NONE;
+                menu_style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+                menu_style.visuals.widgets.open.bg_fill = ThemeColors::ACCENT;
+                menu_style.visuals.widgets.open.bg_stroke = Stroke::NONE;
+                menu_style.visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+                menu_style.spacing.button_padding = egui::vec2(8.0, 4.0);
+
                 menu::bar(ui, |ui| {
                     ui.menu_button("檔案 (File)", |ui| {
                         if ui.button("📂 開啟圖片 (Open)...       Ctrl+O").clicked() {
@@ -94,6 +108,7 @@ impl MenuBar {
 
                     ui.menu_button("說明 (Help)", |ui| {
                         if ui.button("ℹ 關於 Rust Image Viewer").clicked() {
+                            triggered_action = Some(MenuAction::About);
                             ui.close_menu();
                         }
                     });
@@ -101,6 +116,81 @@ impl MenuBar {
             });
 
         triggered_action
+    }
+}
+
+/// 關於對話框視窗
+pub struct AboutDialog;
+
+impl AboutDialog {
+    pub fn show(ctx: &egui::Context, is_open: &mut bool) {
+        if !*is_open {
+            return;
+        }
+
+        egui::Window::new("ℹ 關於 Rust Image Viewer")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fixed_size(egui::vec2(440.0, 340.0))
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(ThemeColors::BG_PANEL)
+                    .inner_margin(Margin::same(20.0))
+                    .stroke(Stroke::new(1.0, ThemeColors::BORDER))
+                    .rounding(Rounding::same(8.0)),
+            )
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new("🖼").size(48.0));
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Rust Image Viewer")
+                            .size(20.0)
+                            .strong()
+                            .color(ThemeColors::TEXT_PRIMARY),
+                    );
+                    ui.label(
+                        RichText::new("版本 v0.1.0 (Rust 2024 Edition)")
+                            .size(12.0)
+                            .color(ThemeColors::ACCENT),
+                    );
+                });
+
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.label(
+                    RichText::new("高效能純 Rust 桌面圖片瀏覽、編輯與查重工具：")
+                        .size(13.0)
+                        .strong()
+                        .color(ThemeColors::TEXT_PRIMARY),
+                );
+                ui.add_space(6.0);
+
+                ui.label(RichText::new("• ⚡ 硬體加速：WGPU 與 egui 流暢 60+ FPS 縮放與平移畫布").size(12.0).color(ThemeColors::TEXT_SECONDARY));
+                ui.label(RichText::new("• 🧵 平行運算：Rayon 多執行緒微調（白平衡、曝光、對比、飽和度）").size(12.0).color(ThemeColors::TEXT_SECONDARY));
+                ui.label(RichText::new("• 🛡️ 安全防護：同目錄原子覆寫、EXIF 旋轉自動校正與 64M 像素保護").size(12.0).color(ThemeColors::TEXT_SECONDARY));
+                ui.label(RichText::new("• 🔀 非破壞式：多步 In-Memory 復原/重做與雙圖分割同步比對視圖").size(12.0).color(ThemeColors::TEXT_SECONDARY));
+                ui.label(RichText::new("• 👥 重複查重：多執行緒 pHash/DCT 感知雜湊與 Union-Find 自動分群").size(12.0).color(ThemeColors::TEXT_SECONDARY));
+
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.vertical_centered(|ui| {
+                    let close_btn = egui::Button::new(
+                        RichText::new("確定 (Close)").size(13.0).strong().color(Color32::WHITE),
+                    )
+                    .fill(ThemeColors::ACCENT)
+                    .min_size(egui::vec2(100.0, 28.0));
+
+                    if ui.add(close_btn).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        *is_open = false;
+                    }
+                });
+            });
     }
 }
 
@@ -320,7 +410,7 @@ impl AdjustmentPanel {
     }
 }
 
-use egui::{pos2, vec2, Align, Rect, Rounding, ScrollArea, Stroke};
+use egui::{pos2, vec2, Align, Rect, ScrollArea};
 use crate::playlist::ImagePlaylist;
 use crate::thumbnail_loader::ThumbnailManager;
 

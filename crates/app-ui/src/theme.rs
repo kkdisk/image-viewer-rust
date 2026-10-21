@@ -22,8 +22,8 @@ impl ThemeColors {
     pub const ACCENT_HOVER: Color32 = Color32::from_rgb(96, 165, 250); // 淺藍重音色 (Blue-400)
 
     pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(244, 244, 245);  // 主文字 (Zinc-100)
-    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(161, 161, 170);// 次要文字 (Zinc-400)
-    pub const TEXT_MUTED: Color32 = Color32::from_rgb(113, 113, 122);    // 暗淡文字 (Zinc-500)
+    pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(180, 180, 190);// 次要文字 (提升對比度)
+    pub const TEXT_MUTED: Color32 = Color32::from_rgb(130, 130, 140);    // 暗淡文字 (提升對比度)
 
     pub const BORDER: Color32 = Color32::from_rgb(45, 45, 52);         // 分隔邊框色
     pub const BORDER_FOCUS: Color32 = Color32::from_rgb(59, 130, 246);   // 焦點邊框
