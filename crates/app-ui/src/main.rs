@@ -2,6 +2,7 @@
 
 mod app;
 mod canvas;
+mod debounce_queue;
 mod panels;
 mod playlist;
 mod theme;

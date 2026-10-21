@@ -2,10 +2,12 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use core_image::AdjustmentParams;
 use egui::{CentralPanel, ColorImage, Key, TextureHandle, TextureOptions};
 use viewer_state::{EditingSession, ViewportState};
 
 use crate::canvas::CanvasView;
+use crate::debounce_queue::AdjustmentDebouncer;
 use crate::panels::{AdjustmentPanel, FilmstripPanel, MenuBar, StatusBar};
 use crate::playlist::ImagePlaylist;
 use crate::theme::apply_theme;
@@ -29,6 +31,10 @@ pub struct ImageViewerApp {
     pub playlist: ImagePlaylist,
     /// 非同步縮圖生成與快取管理器
     pub thumbnail_manager: ThumbnailManager,
+    /// 側邊微調面板目前滑桿參數
+    pub slider_params: AdjustmentParams,
+    /// 像素微調防抖背景運算排程器
+    pub debouncer: AdjustmentDebouncer,
 }
 
 impl ImageViewerApp {
@@ -46,6 +52,8 @@ impl ImageViewerApp {
             last_texture_ptr: 0,
             playlist: ImagePlaylist::new(),
             thumbnail_manager: ThumbnailManager::new(),
+            slider_params: AdjustmentParams::default(),
+            debouncer: AdjustmentDebouncer::new(),
         }
     }
 
@@ -64,6 +72,7 @@ impl ImageViewerApp {
         self.playlist.scan_from_file(&path);
 
         self.session = Some(EditingSession::new(rgba, Some(path)));
+        self.slider_params = AdjustmentParams::default();
         self.viewport.reset_fit_window();
         Ok(())
     }
@@ -203,11 +212,20 @@ impl eframe::App for ImageViewerApp {
         // 2. 處理鍵盤快捷鍵
         self.handle_shortcuts(ctx);
 
-        // 3. 接收背景縮圖結果並同步 GPU 主紋理
+        // 3. 輪詢背景微調防抖計算結果
+        if let Some(res) = self.debouncer.poll() {
+            let params = self.slider_params;
+            if let Some(sess) = &mut self.session {
+                sess.set_preview_image(res.adjusted_image, params);
+                ctx.request_repaint();
+            }
+        }
+
+        // 4. 接收背景縮圖結果並同步 GPU 主紋理
         self.thumbnail_manager.poll_results(ctx);
         self.sync_texture(ctx);
 
-        // 4. 頂部選單列回呼
+        // 5. 頂部選單列回呼
         let mut do_open = false;
         let mut do_reset_100 = false;
         let mut do_reset_fit = false;
@@ -248,7 +266,7 @@ impl eframe::App for ImageViewerApp {
             self.viewport.reset_fit_window();
         }
 
-        // 5. 底部狀態列
+        // 6. 底部狀態列
         let (filename, dimensions, is_dirty) = match &self.session {
             Some(sess) => {
                 let name = sess
@@ -272,7 +290,7 @@ impl eframe::App for ImageViewerApp {
             playlist_info,
         );
 
-        // 6. 底部 Filmstrip 縮圖列
+        // 7. 底部 Filmstrip 縮圖列
         let mut nav_to_idx = None;
         let mut do_prev = false;
         let mut do_next = false;
@@ -297,10 +315,48 @@ impl eframe::App for ImageViewerApp {
             self.navigate_next();
         }
 
-        // 7. 側邊調整面板
-        AdjustmentPanel::show(ctx, &mut self.show_side_panel);
+        // 8. 側邊微調面板
+        let has_image = self.session.is_some();
+        let is_computing = self.debouncer.is_computing();
+        let mut adjustment_action = None;
 
-        // 8. 中央 GPU 加速影像畫布
+        AdjustmentPanel::show(
+            ctx,
+            &mut self.show_side_panel,
+            has_image,
+            &mut self.slider_params,
+            is_computing,
+            &mut adjustment_action,
+        );
+
+        match adjustment_action {
+            Some(crate::panels::AdjustmentAction::Change) => {
+                if let Some(sess) = &mut self.session {
+                    if self.slider_params.is_identity() {
+                        sess.cancel_adjustments();
+                    } else {
+                        let base = sess.committed_image();
+                        self.debouncer.request(base, self.slider_params);
+                    }
+                }
+            }
+            Some(crate::panels::AdjustmentAction::Reset)
+            | Some(crate::panels::AdjustmentAction::Cancel) => {
+                self.slider_params = AdjustmentParams::default();
+                if let Some(sess) = &mut self.session {
+                    sess.cancel_adjustments();
+                }
+            }
+            Some(crate::panels::AdjustmentAction::Apply) => {
+                if let Some(sess) = &mut self.session {
+                    sess.apply_adjustments();
+                }
+                self.slider_params = AdjustmentParams::default();
+            }
+            None => {}
+        }
+
+        // 9. 中央 GPU 加速影像畫布
         CentralPanel::default()
             .frame(egui::Frame::none())
             .show(ctx, |ui| {

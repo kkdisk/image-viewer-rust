@@ -129,24 +129,47 @@ impl StatusBar {
     }
 }
 
+use core_image::AdjustmentParams;
+
+/// 微調面板觸發之動作
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdjustmentAction {
+    Change,
+    Reset,
+    Cancel,
+    Apply,
+}
+
 /// 側邊微調面板容器
 pub struct AdjustmentPanel;
 
 impl AdjustmentPanel {
-    pub fn show(ctx: &egui::Context, is_open: &mut bool) {
+    pub fn show(
+        ctx: &egui::Context,
+        is_open: &mut bool,
+        has_image: bool,
+        params: &mut AdjustmentParams,
+        is_computing: bool,
+        action: &mut Option<AdjustmentAction>,
+    ) {
         if !*is_open {
             return;
         }
 
         SidePanel::right("side_adjustment_panel")
             .resizable(true)
-            .default_width(280.0)
-            .min_width(220.0)
-            .max_width(400.0)
+            .default_width(300.0)
+            .min_width(240.0)
+            .max_width(420.0)
             .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::same(12.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("🎨 影像微調").strong().size(15.0).color(ThemeColors::TEXT_PRIMARY));
+
+                    if is_computing {
+                        ui.label(RichText::new("⚡ 運算中...").size(11.0).color(ThemeColors::WARNING));
+                    }
+
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("✖").clicked() {
                             *is_open = false;
@@ -157,19 +180,100 @@ impl AdjustmentPanel {
                 ui.separator();
                 ui.add_space(8.0);
 
-                // 預留微調控制項容器（為 Task 3.1 準備）
-                ui.label(RichText::new("色彩微調控制項將於 Task 3.1 啟用").color(ThemeColors::TEXT_MUTED).size(12.0));
-                ui.add_space(12.0);
+                if !has_image {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(30.0);
+                        ui.label(RichText::new("尚未開啟圖片\n請先開啟一張圖片後方可進行微調").color(ThemeColors::TEXT_MUTED).size(13.0));
+                    });
+                    return;
+                }
 
-                ui.collapsing("白平衡 (White Balance)", |ui| {
-                    ui.label(RichText::new("色溫 (Temperature): 0").color(ThemeColors::TEXT_SECONDARY));
-                    ui.label(RichText::new("色調 (Tint): 0").color(ThemeColors::TEXT_SECONDARY));
+                let mut changed = false;
+
+                // 1. 白平衡區塊
+                ui.collapsing(RichText::new("白平衡 (White Balance)").strong().color(ThemeColors::TEXT_PRIMARY), |ui| {
+                    ui.add_space(4.0);
+                    let s_temp = ui.add(
+                        egui::Slider::new(&mut params.temperature, -100..=100)
+                            .clamping(egui::SliderClamping::Always)
+                            .text("色溫 (K)"),
+                    );
+                    if s_temp.changed() {
+                        changed = true;
+                    }
+
+                    let s_tint = ui.add(
+                        egui::Slider::new(&mut params.tint, -100..=100)
+                            .clamping(egui::SliderClamping::Always)
+                            .text("色調 (Tint)"),
+                    );
+                    if s_tint.changed() {
+                        changed = true;
+                    }
                 });
 
-                ui.collapsing("細部調整 (Fine Tune)", |ui| {
-                    ui.label(RichText::new("亮度 (Brightness): 100%").color(ThemeColors::TEXT_SECONDARY));
-                    ui.label(RichText::new("對比度 (Contrast): 100%").color(ThemeColors::TEXT_SECONDARY));
-                    ui.label(RichText::new("飽和度 (Saturation): 100%").color(ThemeColors::TEXT_SECONDARY));
+                ui.add_space(6.0);
+
+                // 2. 細部微調區塊
+                ui.collapsing(RichText::new("細部調整 (Fine Tune)").strong().color(ThemeColors::TEXT_PRIMARY), |ui| {
+                    ui.add_space(4.0);
+                    let s_bright = ui.add(
+                        egui::Slider::new(&mut params.brightness, 0.0..=2.0)
+                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                            .text("亮度 (Brightness)"),
+                    );
+                    if s_bright.changed() {
+                        changed = true;
+                    }
+
+                    let s_contrast = ui.add(
+                        egui::Slider::new(&mut params.contrast, 0.0..=2.0)
+                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                            .text("對比度 (Contrast)"),
+                    );
+                    if s_contrast.changed() {
+                        changed = true;
+                    }
+
+                    let s_sat = ui.add(
+                        egui::Slider::new(&mut params.saturation, 0.0..=2.0)
+                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                            .text("飽和度 (Saturation)"),
+                    );
+                    if s_sat.changed() {
+                        changed = true;
+                    }
+                });
+
+                if changed {
+                    *action = Some(AdjustmentAction::Change);
+                }
+
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                // 3. 動作按鈕群
+                let is_dirty = !params.is_identity();
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(is_dirty, egui::Button::new("重設 (Reset)")).clicked() {
+                        *action = Some(AdjustmentAction::Reset);
+                    }
+
+                    if ui.add_enabled(is_dirty, egui::Button::new("取消 (Cancel)")).clicked() {
+                        *action = Some(AdjustmentAction::Cancel);
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let apply_btn = egui::Button::new(
+                            RichText::new("✓ 套用 (Apply)").strong().color(egui::Color32::WHITE),
+                        )
+                        .fill(ThemeColors::ACCENT);
+
+                        if ui.add_enabled(is_dirty, apply_btn).clicked() {
+                            *action = Some(AdjustmentAction::Apply);
+                        }
+                    });
                 });
             });
     }

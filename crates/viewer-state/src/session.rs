@@ -93,6 +93,16 @@ impl EditingSession {
         }
     }
 
+    /// 設定由背景非同步運算完成之預覽影像快照
+    pub fn set_preview_image(&mut self, preview: Arc<RgbaImage>, params: AdjustmentParams) {
+        self.adjustment_params = params;
+        if params.is_identity() {
+            self.preview_image = None;
+        } else {
+            self.preview_image = Some(preview);
+        }
+    }
+
     /// 套用微調：將目前預覽結果提交至 Undo 歷史，並重設微調滑桿
     pub fn apply_adjustments(&mut self) -> bool {
         if let Some(preview) = self.preview_image.take() {
