@@ -1,30 +1,48 @@
 use egui::{menu, Margin, RichText, SidePanel, TopBottomPanel};
 use crate::theme::ThemeColors;
 
+/// 選單觸發之動作
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuAction {
+    Open,
+    Save,
+    SaveAs,
+    Undo,
+    Redo,
+    Reset100,
+    ResetFit,
+}
+
+/// 選單狀態與切換開關
+pub struct MenuBarState<'a> {
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub show_side_panel: &'a mut bool,
+    pub show_filmstrip: &'a mut bool,
+}
+
 /// 頂部主選單列
 pub struct MenuBar;
 
 impl MenuBar {
-    pub fn show(
-        ctx: &egui::Context,
-        on_open_file: &mut impl FnMut(),
-        on_save_file: &mut impl FnMut(),
-        show_side_panel: &mut bool,
-        show_filmstrip: &mut bool,
-        do_reset_100: &mut bool,
-        do_reset_fit: &mut bool,
-    ) {
+    pub fn show(ctx: &egui::Context, state: &mut MenuBarState<'_>) -> Option<MenuAction> {
+        let mut triggered_action = None;
+
         TopBottomPanel::top("top_menu_bar")
             .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::symmetric(10.0, 4.0)))
             .show(ctx, |ui| {
                 menu::bar(ui, |ui| {
                     ui.menu_button("檔案 (File)", |ui| {
-                        if ui.button("📂 開啟圖片 (Open)...").clicked() {
-                            on_open_file();
+                        if ui.button("📂 開啟圖片 (Open)...       Ctrl+O").clicked() {
+                            triggered_action = Some(MenuAction::Open);
                             ui.close_menu();
                         }
-                        if ui.button("💾 儲存變更 (Save)").clicked() {
-                            on_save_file();
+                        if ui.button("💾 儲存變更 (Save)          Ctrl+S").clicked() {
+                            triggered_action = Some(MenuAction::Save);
+                            ui.close_menu();
+                        }
+                        if ui.button("📝 另存新檔 (Save As)...  Ctrl+Shift+S").clicked() {
+                            triggered_action = Some(MenuAction::SaveAs);
                             ui.close_menu();
                         }
                         ui.separator();
@@ -33,16 +51,30 @@ impl MenuBar {
                         }
                     });
 
+                    ui.menu_button("編輯 (Edit)", |ui| {
+                        let undo_btn = ui.add_enabled(state.can_undo, egui::Button::new("⮌ 復原 (Undo)    Ctrl+Z"));
+                        if undo_btn.clicked() {
+                            triggered_action = Some(MenuAction::Undo);
+                            ui.close_menu();
+                        }
+
+                        let redo_btn = ui.add_enabled(state.can_redo, egui::Button::new("⮎ 重做 (Redo)    Ctrl+Y"));
+                        if redo_btn.clicked() {
+                            triggered_action = Some(MenuAction::Redo);
+                            ui.close_menu();
+                        }
+                    });
+
                     ui.menu_button("檢視 (View)", |ui| {
-                        ui.checkbox(show_side_panel, "側邊微調面板");
-                        ui.checkbox(show_filmstrip, "底部縮圖列表 (Filmstrip)");
+                        ui.checkbox(state.show_side_panel, "側邊微調面板");
+                        ui.checkbox(state.show_filmstrip, "底部縮圖列表 (Filmstrip)");
                         ui.separator();
                         if ui.button("🔍 100% 原始尺寸 (1)").clicked() {
-                            *do_reset_100 = true;
+                            triggered_action = Some(MenuAction::Reset100);
                             ui.close_menu();
                         }
                         if ui.button("📐 符合視窗 (0 / F)").clicked() {
-                            *do_reset_fit = true;
+                            triggered_action = Some(MenuAction::ResetFit);
                             ui.close_menu();
                         }
                     });
@@ -60,6 +92,8 @@ impl MenuBar {
                     });
                 });
             });
+
+        triggered_action
     }
 }
 
@@ -266,7 +300,7 @@ impl AdjustmentPanel {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let apply_btn = egui::Button::new(
-                            RichText::new("✓ 套用 (Apply)").strong().color(egui::Color32::WHITE),
+                            RichText::new("套用 (Apply)").strong().color(egui::Color32::WHITE),
                         )
                         .fill(ThemeColors::ACCENT);
 

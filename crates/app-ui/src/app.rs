@@ -37,12 +37,8 @@ pub struct ImageViewerApp {
     pub debouncer: AdjustmentDebouncer,
 }
 
-impl ImageViewerApp {
-    /// 建立應用實例
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // 套用自訂現代暗色主題與微軟正黑體字型
-        apply_theme(&cc.egui_ctx);
-
+impl Default for ImageViewerApp {
+    fn default() -> Self {
         Self {
             session: None,
             viewport: ViewportState::new(),
@@ -55,6 +51,15 @@ impl ImageViewerApp {
             slider_params: AdjustmentParams::default(),
             debouncer: AdjustmentDebouncer::new(),
         }
+    }
+}
+
+impl ImageViewerApp {
+    /// 建立應用實例
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // 套用自訂現代暗色主題與微軟正黑體字型
+        apply_theme(&cc.egui_ctx);
+        Self::default()
     }
 
     /// 開啟指定路徑之影像，並自動掃描同目錄圖片加入清單
@@ -135,17 +140,110 @@ impl ImageViewerApp {
         }
     }
 
+    /// 復原上一動作
+    pub fn undo(&mut self) {
+        if let Some(session) = &mut self.session
+            && session.undo()
+        {
+            self.slider_params = AdjustmentParams::default();
+        }
+    }
+
+    /// 重做下一動作
+    pub fn redo(&mut self) {
+        if let Some(session) = &mut self.session
+            && session.redo()
+        {
+            self.slider_params = AdjustmentParams::default();
+        }
+    }
+
+    /// 原地原子儲存已提交之影像
+    pub fn save_current_image(&mut self) -> bool {
+        if let Some(session) = &mut self.session {
+            if let Some(path) = session.source_path().map(|p| p.to_path_buf()) {
+                let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
+                if core_image::save_image_atomic(&dyn_img, &path).is_ok() {
+                    session.mark_saved();
+                    return true;
+                }
+            } else {
+                // 若無來源路徑則轉為另存新檔
+                self.save_image_as_dialog();
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 彈出原生對話框另存新檔
+    pub fn save_image_as_dialog(&mut self) {
+        if let Some(session) = &mut self.session {
+            let dialog = rfd::FileDialog::new()
+                .add_filter("PNG 影像 (*.png)", &["png"])
+                .add_filter("JPEG 影像 (*.jpg, *.jpeg)", &["jpg", "jpeg"])
+                .add_filter("BMP 影像 (*.bmp)", &["bmp"])
+                .add_filter("WebP 影像 (*.webp)", &["webp"])
+                .add_filter("TIFF 影像 (*.tiff)", &["tiff"]);
+
+            let dialog = if let Some(src) = session.source_path() {
+                if let Some(parent) = src.parent() {
+                    dialog.set_directory(parent)
+                } else {
+                    dialog
+                }
+            } else {
+                dialog
+            };
+
+            if let Some(target_path) = dialog.save_file() {
+                let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
+                if core_image::save_image_atomic(&dyn_img, &target_path).is_ok() {
+                    session.set_source_path(target_path.clone());
+                    session.mark_saved();
+                    // 若新檔案加入目錄，更新 playlist
+                    self.playlist.scan_from_file(&target_path);
+                }
+            }
+        }
+    }
+
     /// 處理鍵盤快捷鍵
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let mut do_prev = false;
         let mut do_next = false;
         let mut do_first = false;
         let mut do_last = false;
+        let mut do_undo = false;
+        let mut do_redo = false;
+        let mut do_save = false;
+        let mut do_save_as = false;
 
         ctx.input(|i| {
             // Ctrl + O: 開啟圖片
-            if i.modifiers.command && i.key_pressed(Key::O) {
+            if i.modifiers.command && !i.modifiers.shift && i.key_pressed(Key::O) {
                 self.open_file_dialog();
+            }
+
+            // Ctrl + S / Ctrl + Shift + S: 儲存 / 另存新檔
+            if i.modifiers.command && i.key_pressed(Key::S) {
+                if i.modifiers.shift {
+                    do_save_as = true;
+                } else {
+                    do_save = true;
+                }
+            }
+
+            // Ctrl + Z / Ctrl + Shift + Z / Ctrl + Y: 復原 / 重做
+            if i.modifiers.command && i.key_pressed(Key::Z) {
+                if i.modifiers.shift {
+                    do_redo = true;
+                } else {
+                    do_undo = true;
+                }
+            }
+            if i.modifiers.command && i.key_pressed(Key::Y) {
+                do_redo = true;
             }
 
             // 圖片前後巡迴導覽 (左/右方向鍵, PageUp/PageDown, Home/End)
@@ -179,6 +277,18 @@ impl ImageViewerApp {
             }
         });
 
+        if do_undo {
+            self.undo();
+        }
+        if do_redo {
+            self.redo();
+        }
+        if do_save {
+            self.save_current_image();
+        }
+        if do_save_as {
+            self.save_image_as_dialog();
+        }
         if do_prev {
             self.navigate_prev();
         }
@@ -202,6 +312,21 @@ impl ImageViewerApp {
 
 impl eframe::App for ImageViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 0. 更新視窗標題（帶未儲存星號 *）
+        let title = match &self.session {
+            Some(sess) => {
+                let name = sess
+                    .source_path()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("未命名圖片");
+                let dirty_mark = if sess.is_dirty() { " *" } else { "" };
+                format!("{} - 圖片檢視器{}", name, dirty_mark)
+            }
+            None => "純 Rust 高效能圖片瀏覽器".to_string(),
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+
         // 1. 處理全域檔案拖曳放入
         ctx.input(|i| {
             if let Some(path) = i.raw.dropped_files.first().and_then(|d| d.path.as_ref()) {
@@ -225,45 +350,29 @@ impl eframe::App for ImageViewerApp {
         self.thumbnail_manager.poll_results(ctx);
         self.sync_texture(ctx);
 
-        // 5. 頂部選單列回呼
-        let mut do_open = false;
-        let mut do_reset_100 = false;
-        let mut do_reset_fit = false;
+        // 5. 頂部選單列
+        let can_undo = self.session.as_ref().map(|s| s.can_undo()).unwrap_or(false);
+        let can_redo = self.session.as_ref().map(|s| s.can_redo()).unwrap_or(false);
 
-        let mut on_open = || {
-            do_open = true;
+        let mut menu_state = crate::panels::MenuBarState {
+            can_undo,
+            can_redo,
+            show_side_panel: &mut self.show_side_panel,
+            show_filmstrip: &mut self.show_filmstrip,
         };
 
-        let mut on_save = || {
-            if let Some(session) = &mut self.session {
-                let source = session.source_path().map(|p| p.to_path_buf());
-                if let Some(path) = source {
-                    let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
-                    if core_image::save_image_atomic(&dyn_img, path).is_ok() {
-                        session.mark_saved();
-                    }
+        if let Some(action) = MenuBar::show(ctx, &mut menu_state) {
+            match action {
+                crate::panels::MenuAction::Open => self.open_file_dialog(),
+                crate::panels::MenuAction::Save => {
+                    self.save_current_image();
                 }
+                crate::panels::MenuAction::SaveAs => self.save_image_as_dialog(),
+                crate::panels::MenuAction::Undo => self.undo(),
+                crate::panels::MenuAction::Redo => self.redo(),
+                crate::panels::MenuAction::Reset100 => self.viewport.reset_actual_size(),
+                crate::panels::MenuAction::ResetFit => self.viewport.reset_fit_window(),
             }
-        };
-
-        MenuBar::show(
-            ctx,
-            &mut on_open,
-            &mut on_save,
-            &mut self.show_side_panel,
-            &mut self.show_filmstrip,
-            &mut do_reset_100,
-            &mut do_reset_fit,
-        );
-
-        if do_open {
-            self.open_file_dialog();
-        }
-        if do_reset_100 {
-            self.viewport.reset_actual_size();
-        }
-        if do_reset_fit {
-            self.viewport.reset_fit_window();
         }
 
         // 6. 底部狀態列

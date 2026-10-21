@@ -1,14 +1,4 @@
-//! Rust Image Viewer 桌面主程式進入點
-
-mod app;
-mod canvas;
-mod debounce_queue;
-mod panels;
-mod playlist;
-mod theme;
-mod thumbnail_loader;
-
-use app::ImageViewerApp;
+use app_ui::app::ImageViewerApp;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {

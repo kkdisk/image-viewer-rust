@@ -115,6 +115,7 @@ impl ImagePlaylist {
     }
 
     /// 切換至下一張圖片
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<PathBuf> {
         if self.files.is_empty() {
             return None;

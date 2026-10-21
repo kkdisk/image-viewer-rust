@@ -3,6 +3,14 @@ name = "app-ui"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "app_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "app-ui"
+path = "src/main.rs"
+
 [dependencies]
 core-image = { path = "../core-image" }
 core-archive = { path = "../core-archive" }
