@@ -57,21 +57,56 @@ pub fn compute_phash<P: AsRef<Path>>(
     Ok(compute_phash_from_image(&dyn_img, hash_size))
 }
 
+use std::sync::LazyLock;
+
+/// 預先計算之 32 點 DCT-II 餘弦查詢表 (32x32 = 1024 項)，避免百萬次重複三角函數計算
+static COS_TABLE_32: LazyLock<Vec<f64>> = LazyLock::new(|| compute_dct_cos_table(32));
+
+/// 預先計算 N 點 DCT-II 餘弦查詢表: table[k * n + i] = cos(PI * (2*i + 1) * k / (2*n))
+fn compute_dct_cos_table(n: usize) -> Vec<f64> {
+    let mut table = vec![0.0f64; n * n];
+    let n_f64 = n as f64;
+    for k in 0..n {
+        let row_offset = k * n;
+        for i in 0..n {
+            table[row_offset + i] =
+                ((std::f64::consts::PI * (2.0 * i as f64 + 1.0) * k as f64) / (2.0 * n_f64)).cos();
+        }
+    }
+    table
+}
+
 /// 自記憶體中之 DynamicImage 計算感知雜湊 (pHash)
 ///
 /// 流程：
-/// 1. 將圖片縮放至 (hash_size * 4) x (hash_size * 4)，使用平滑濾波
+/// 1. 使用高效整數快速下採樣 thumbnail_exact 至 (hash_size * 4) x (hash_size * 4)
 /// 2. 轉為灰階圖 (Luma8)
-/// 3. 計算 2D DCT (Type-II) 頻譜矩陣
+/// 3. 計算 2D DCT (Type-II) 頻譜矩陣（基於預計算餘弦表查表加速）
 /// 4. 取左上 hash_size x hash_size 低頻區塊（跳過 DC [0,0] 分量）
 /// 5. 計算低頻分量之中位數，進行二值化並打包為 bytes
 pub fn compute_phash_from_image(img: &DynamicImage, hash_size: u32) -> Vec<u8> {
     let resize_dim = hash_size * 4;
-    let resized = img.resize_exact(resize_dim, resize_dim, image::imageops::FilterType::Triangle);
-    let gray = resized.to_luma8();
+    
+    // 先轉為單通道灰階圖 (運算量減少 66%)
+    let gray = img.to_luma8();
+    
+    // 若原圖過大，先快速盒狀採樣縮至 256x256（保持充分取樣率杜絕混疊噪點，同時大幅縮減運算量）
+    let intermediate = if gray.width() > 256 || gray.height() > 256 {
+        image::imageops::thumbnail(&gray, 256, 256)
+    } else {
+        gray
+    };
+    
+    // 使用平滑三角濾波 (Triangle) 縮放至目標低頻方塊 32x32
+    let resized = image::imageops::resize(
+        &intermediate,
+        resize_dim,
+        resize_dim,
+        image::imageops::FilterType::Triangle,
+    );
 
     let n = resize_dim as usize;
-    let pixels: Vec<f64> = gray.pixels().map(|p| p.0[0] as f64).collect();
+    let pixels: Vec<f64> = resized.pixels().map(|p| p.0[0] as f64).collect();
 
     // 計算 2D DCT
     let dct = dct_2d(&pixels, n, n);
@@ -134,12 +169,18 @@ pub fn batch_compute_hashes<P: AsRef<Path> + Sync>(
 
 /// 計算 2D 離散餘弦變換 (DCT-II)
 fn dct_2d(input: &[f64], rows: usize, cols: usize) -> Vec<f64> {
+    let cos_table = if rows == 32 && cols == 32 {
+        Some(&*COS_TABLE_32)
+    } else {
+        None
+    };
+
     // 1. 行 DCT
     let mut row_dct = vec![0.0f64; rows * cols];
     for r in 0..rows {
         let row_start = r * cols;
         let row_data = &input[row_start..row_start + cols];
-        let dct_row = dct_1d(row_data);
+        let dct_row = dct_1d(row_data, cos_table);
         row_dct[row_start..row_start + cols].copy_from_slice(&dct_row);
     }
 
@@ -147,7 +188,7 @@ fn dct_2d(input: &[f64], rows: usize, cols: usize) -> Vec<f64> {
     let mut result = vec![0.0f64; rows * cols];
     for c in 0..cols {
         let col_data: Vec<f64> = (0..rows).map(|r| row_dct[r * cols + c]).collect();
-        let dct_col = dct_1d(&col_data);
+        let dct_col = dct_1d(&col_data, cos_table);
         for r in 0..rows {
             result[r * cols + c] = dct_col[r];
         }
@@ -156,21 +197,32 @@ fn dct_2d(input: &[f64], rows: usize, cols: usize) -> Vec<f64> {
     result
 }
 
-/// 計算 1D 離散餘弦變換 (DCT-II)
-fn dct_1d(input: &[f64]) -> Vec<f64> {
+/// 計算 1D 離散餘弦變換 (DCT-II)（支援傳入預先計算之餘弦查詢表）
+fn dct_1d(input: &[f64], cos_table: Option<&Vec<f64>>) -> Vec<f64> {
     let n = input.len();
     let mut output = vec![0.0f64; n];
-    let n_f64 = n as f64;
 
-    for (k, out) in output.iter_mut().enumerate() {
-        let mut sum = 0.0f64;
-        for (i, &inp) in input.iter().enumerate() {
-            sum += inp
-                * ((std::f64::consts::PI * (2.0 * i as f64 + 1.0) * k as f64)
-                    / (2.0 * n_f64))
-                    .cos();
+    if let Some(table) = cos_table {
+        for (k, out) in output.iter_mut().enumerate() {
+            let row_offset = k * n;
+            let mut sum = 0.0f64;
+            for (i, &inp) in input.iter().enumerate() {
+                sum += inp * table[row_offset + i];
+            }
+            *out = sum;
         }
-        *out = sum;
+    } else {
+        let n_f64 = n as f64;
+        for (k, out) in output.iter_mut().enumerate() {
+            let mut sum = 0.0f64;
+            for (i, &inp) in input.iter().enumerate() {
+                sum += inp
+                    * ((std::f64::consts::PI * (2.0 * i as f64 + 1.0) * k as f64)
+                        / (2.0 * n_f64))
+                        .cos();
+            }
+            *out = sum;
+        }
     }
 
     output
