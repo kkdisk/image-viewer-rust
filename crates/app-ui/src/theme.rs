@@ -31,8 +31,45 @@ impl ThemeColors {
     pub const WARNING: Color32 = Color32::from_rgb(234, 179, 8);        // 警示黃
 }
 
+/// 配置繁體中文字型支援（載入微軟正黑體等系統字型以杜絕方框豆腐塊）
+pub fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // Windows 繁體中文與 CJK 候選字型路徑
+    let candidate_fonts = [
+        ("msjh", r"C:\Windows\Fonts\msjh.ttc"),       // 微軟正黑體 (首選)
+        ("msjh_light", r"C:\Windows\Fonts\msjhl.ttc"),// 微軟正黑體 Light
+        ("mingliu", r"C:\Windows\Fonts\mingliu.ttc"), // 細明體
+    ];
+
+    for (font_name, font_path) in candidate_fonts {
+        if let Ok(font_bytes) = std::fs::read(font_path) {
+            fonts.font_data.insert(
+                font_name.to_owned(),
+                egui::FontData::from_owned(font_bytes),
+            );
+
+            // 將中文字型置於 Proportional 無襯線字型優先清單最前列
+            if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                prop.insert(0, font_name.to_owned());
+            }
+
+            // 同步加入 Monospace 等寬字型作為備用
+            if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                mono.push(font_name.to_owned());
+            }
+
+            ctx.set_fonts(fonts);
+            break;
+        }
+    }
+}
+
 /// 套用專業暗色主題視覺設定至 egui::Context
 pub fn apply_theme(ctx: &egui::Context) {
+    // 優先設定中文字型
+    setup_custom_fonts(ctx);
+
     let mut visuals = Visuals::dark();
 
     // 背景底色
