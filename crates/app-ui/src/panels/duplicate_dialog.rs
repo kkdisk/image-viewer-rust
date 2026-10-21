@@ -514,16 +514,20 @@ impl DuplicateFinderDialog {
         let is_scanning = matches!(state.status, ScanStatus::Scanning { .. });
 
         let screen_size = ctx.screen_rect().size();
-        let default_width = (screen_size.x * 0.85).clamp(800.0, 1280.0);
-        let default_height = (screen_size.y * 0.85).clamp(550.0, 850.0);
+        let max_dialog_height = (screen_size.y - 140.0).max(380.0);
+        let default_width = (screen_size.x * 0.82).clamp(720.0, 1100.0);
+        let default_height = (screen_size.y * 0.62).clamp(400.0, max_dialog_height);
 
         let mut is_open = state.is_open;
 
-        Window::new("👥 重複圖片檢查器 (Duplicate Image Finder)")
+        Window::new("👥 重複圖片檢查器 (Duplicate Finder)")
             .open(&mut is_open)
             .default_size(vec2(default_width, default_height))
-            .min_size(vec2(760.0, 500.0))
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .min_size(vec2(680.0, 360.0))
+            .max_size(vec2(screen_size.x - 40.0, max_dialog_height))
+            .resizable(true)
+            .collapsible(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, -25.0))
             .frame(
                 Frame::window(&ctx.style())
                     .fill(ThemeColors::BG_PANEL)
@@ -672,29 +676,30 @@ impl DuplicateFinderDialog {
                 }
 
                 // 5. 主內容區域：左側群組清單 + 右側左右雙圖比對預覽
-                let available_height = ui.available_height();
+                let available_height = (ui.available_height() - 8.0).max(200.0);
                 ui.columns(2, |cols| {
                     // 左側欄：群組與檔案清單
                     cols[0].group(|ui| {
-                        ui.set_height(available_height);
+                        ui.set_max_height(available_height);
                         ui.heading(RichText::new("📋 重複群組清單").size(14.0).color(ThemeColors::TEXT_SECONDARY));
                         ui.add_space(4.0);
 
                         if state.groups.is_empty() {
                             if matches!(state.status, ScanStatus::Completed { .. }) {
                                 ui.vertical_centered(|ui| {
-                                    ui.add_space(60.0);
+                                    ui.add_space(40.0);
                                     ui.label(RichText::new("🎉 太棒了！未發現任何重複圖片。").size(15.0).color(ThemeColors::SUCCESS));
                                 });
                             } else {
                                 ui.vertical_centered(|ui| {
-                                    ui.add_space(60.0);
+                                    ui.add_space(40.0);
                                     ui.label(RichText::new("請選擇資料夾並點擊「開始掃描」").color(ThemeColors::TEXT_MUTED));
                                 });
                             }
                         } else {
                             ScrollArea::vertical()
                                 .id_salt("duplicate_groups_scroll")
+                                .max_height(available_height - 30.0)
                                 .show(ui, |ui| {
                                     for g_idx in 0..state.groups.len() {
                                         let group = &state.groups[g_idx];
@@ -829,56 +834,61 @@ impl DuplicateFinderDialog {
 
                     // 右側欄：雙圖左右比對預覽視圖
                     cols[1].group(|ui| {
-                        ui.set_height(available_height);
+                        ui.set_max_height(available_height);
                         ui.heading(RichText::new("🔍 左右比對預覽").size(14.0).color(ThemeColors::TEXT_SECONDARY));
                         ui.add_space(4.0);
 
-                        if let Some((ref_item, comp_item, comp_idx)) = preview_pair {
-                            ui.columns(2, |sub_cols| {
-                                // 左：基準圖
-                                sub_cols[0].group(|ui| {
-                                    ui.label(RichText::new("📌 基準圖 (項 1)").strong().color(ThemeColors::ACCENT));
-                                    render_preview_card(
-                                        ctx,
-                                        ui,
-                                        state,
-                                        &ref_item,
-                                        &mut navigate_to_path,
-                                    );
-                                });
+                        ScrollArea::vertical()
+                            .id_salt("duplicate_preview_scroll")
+                            .max_height(available_height - 30.0)
+                            .show(ui, |ui| {
+                                if let Some((ref_item, comp_item, comp_idx)) = preview_pair {
+                                    ui.columns(2, |sub_cols| {
+                                        // 左：基準圖
+                                        sub_cols[0].group(|ui| {
+                                            ui.label(RichText::new("📌 基準圖 (項 1)").strong().color(ThemeColors::ACCENT));
+                                            render_preview_card(
+                                                ctx,
+                                                ui,
+                                                state,
+                                                &ref_item,
+                                                &mut navigate_to_path,
+                                            );
+                                        });
 
-                                // 右：比對圖
-                                sub_cols[1].group(|ui| {
-                                    let title = if comp_idx == 0 {
-                                        "🔍 當前圖 (同項 1)".to_string()
-                                    } else {
-                                        format!("🔍 比對圖 (項 {})", comp_idx + 1)
-                                    };
-                                    ui.label(RichText::new(title).strong().color(ThemeColors::ACCENT_HOVER));
-                                    render_preview_card(
-                                        ctx,
-                                        ui,
-                                        state,
-                                        &comp_item,
-                                        &mut navigate_to_path,
-                                    );
-                                });
+                                        // 右：比對圖
+                                        sub_cols[1].group(|ui| {
+                                            let title = if comp_idx == 0 {
+                                                "🔍 當前圖 (同項 1)".to_string()
+                                            } else {
+                                                format!("🔍 比對圖 (項 {})", comp_idx + 1)
+                                            };
+                                            ui.label(RichText::new(title).strong().color(ThemeColors::ACCENT_HOVER));
+                                            render_preview_card(
+                                                ctx,
+                                                ui,
+                                                state,
+                                                &comp_item,
+                                                &mut navigate_to_path,
+                                            );
+                                        });
+                                    });
+
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+
+                                    // 詳細路徑比對
+                                    ui.label(RichText::new("路徑詳細比對：").strong().color(ThemeColors::TEXT_SECONDARY));
+                                    ui.label(RichText::new(format!("基準: {}", ref_item.path.display())).monospace().size(11.0));
+                                    ui.label(RichText::new(format!("比對: {}", comp_item.path.display())).monospace().size(11.0));
+                                } else {
+                                    ui.vertical_centered(|ui| {
+                                        ui.add_space(40.0);
+                                        ui.label(RichText::new("點擊左側任一重複群組進行雙圖預覽比對").color(ThemeColors::TEXT_MUTED));
+                                    });
+                                }
                             });
-
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.add_space(6.0);
-
-                            // 詳細路徑比對
-                            ui.label(RichText::new("路徑詳細比對：").strong().color(ThemeColors::TEXT_SECONDARY));
-                            ui.label(RichText::new(format!("基準: {}", ref_item.path.display())).monospace().size(11.0));
-                            ui.label(RichText::new(format!("比對: {}", comp_item.path.display())).monospace().size(11.0));
-                        } else {
-                            ui.vertical_centered(|ui| {
-                                ui.add_space(80.0);
-                                ui.label(RichText::new("點擊左側任一重複群組進行雙圖預覽比對").color(ThemeColors::TEXT_MUTED));
-                            });
-                        }
                     });
                 });
             });
@@ -959,8 +969,8 @@ fn render_preview_card(
 
     ui.add_space(6.0);
 
-    // 縮圖畫布容器
-    let preview_size = vec2(ui.available_width().max(120.0), 180.0);
+    // 縮圖畫布容器 (高度適中 140.0，避免在小解析度下撐出視窗)
+    let preview_size = vec2(ui.available_width().max(100.0), 140.0);
     let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
 
     ui.painter().rect_filled(rect, Rounding::same(6.0), ThemeColors::BG_CANVAS);
