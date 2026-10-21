@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "viewer-state"
 version.workspace = true
 edition.workspace = true
@@ -7,3 +7,6 @@ edition.workspace = true
 core-image = { path = "../core-image" }
 image.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
