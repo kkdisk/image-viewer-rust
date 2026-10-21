@@ -6,7 +6,7 @@ use core_image::AdjustmentParams;
 use egui::{CentralPanel, ColorImage, Key, TextureHandle, TextureOptions};
 use viewer_state::{EditingSession, ViewportState};
 
-use crate::canvas::CanvasView;
+use crate::canvas::{CanvasState, CanvasView, ComparisonAction, ComparisonConfig, ComparisonSource};
 use crate::debounce_queue::AdjustmentDebouncer;
 use crate::panels::{AdjustmentPanel, FilmstripPanel, MenuBar, StatusBar};
 use crate::playlist::ImagePlaylist;
@@ -35,6 +35,18 @@ pub struct ImageViewerApp {
     pub slider_params: AdjustmentParams,
     /// 像素微調防抖背景運算排程器
     pub debouncer: AdjustmentDebouncer,
+    /// 雙圖比對視圖配置
+    pub comparison: ComparisonConfig,
+    /// 雙圖比對時左側獨立視口（當未開啟同步時使用）
+    pub left_viewport: ViewportState,
+    /// 原始底圖 GPU 紋理（用於原圖比對）
+    pub original_texture: Option<TextureHandle>,
+    /// 原始底圖底層指標
+    last_original_ptr: usize,
+    /// 外部參考圖 RGBA 快照
+    pub reference_image: Option<Arc<image::RgbaImage>>,
+    /// 外部參考圖 GPU 紋理
+    pub reference_texture: Option<TextureHandle>,
 }
 
 impl Default for ImageViewerApp {
@@ -50,6 +62,12 @@ impl Default for ImageViewerApp {
             thumbnail_manager: ThumbnailManager::new(),
             slider_params: AdjustmentParams::default(),
             debouncer: AdjustmentDebouncer::new(),
+            comparison: ComparisonConfig::default(),
+            left_viewport: ViewportState::new(),
+            original_texture: None,
+            last_original_ptr: 0,
+            reference_image: None,
+            reference_texture: None,
         }
     }
 }
@@ -79,6 +97,12 @@ impl ImageViewerApp {
         self.session = Some(EditingSession::new(rgba, Some(path)));
         self.slider_params = AdjustmentParams::default();
         self.viewport.reset_fit_window();
+        self.left_viewport = self.viewport;
+        self.original_texture = None;
+        self.last_original_ptr = 0;
+        self.reference_texture = None;
+        self.reference_image = None;
+        self.comparison.reference_path = None;
         Ok(())
     }
 
@@ -91,6 +115,33 @@ impl ImageViewerApp {
 
         if let Some(path) = file {
             let _ = self.open_image_path(path);
+        }
+    }
+
+    /// 開啟外部參考圖檔案對話框
+    pub fn open_reference_image_dialog(&mut self) {
+        let file = rfd::FileDialog::new()
+            .add_filter("圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)", &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"])
+            .add_filter("所有檔案 (*.*)", &["*"])
+            .pick_file();
+
+        if let Some(path) = file
+            && let Ok(dyn_img) = core_image::load_image(&path)
+        {
+            let rgba = dyn_img.to_rgba8();
+            self.reference_image = Some(Arc::new(rgba));
+            self.reference_texture = None;
+            self.comparison.reference_path = Some(path);
+            self.comparison.source = ComparisonSource::Reference;
+            self.comparison.is_active = true;
+        }
+    }
+
+    /// 切換雙圖分割比對模式
+    pub fn toggle_side_by_side(&mut self) {
+        self.comparison.is_active = !self.comparison.is_active;
+        if self.comparison.is_active && self.comparison.sync_viewport {
+            self.left_viewport = self.viewport;
         }
     }
 
@@ -115,7 +166,7 @@ impl ImageViewerApp {
         }
     }
 
-    /// 更新 GPU 影像紋理
+    /// 更新 GPU 影像紋理（主視口與雙圖左側視口）
     fn sync_texture(&mut self, ctx: &egui::Context) {
         if let Some(sess) = &self.session {
             let active = sess.active_image();
@@ -134,9 +185,48 @@ impl ImageViewerApp {
                 self.texture = Some(handle);
                 self.last_texture_ptr = current_ptr;
             }
+
+            // 若雙圖分割對比啟用中，更新左側紋理
+            if self.comparison.is_active {
+                match self.comparison.source {
+                    ComparisonSource::Original => {
+                        let orig = sess.original_image();
+                        let orig_ptr = Arc::as_ptr(&orig) as usize;
+                        if self.original_texture.is_none() || self.last_original_ptr != orig_ptr {
+                            let size = [orig.width() as usize, orig.height() as usize];
+                            let color_image = ColorImage::from_rgba_unmultiplied(size, orig.as_raw());
+                            let handle = ctx.load_texture(
+                                "original_viewport_image",
+                                color_image,
+                                TextureOptions::LINEAR,
+                            );
+                            self.original_texture = Some(handle);
+                            self.last_original_ptr = orig_ptr;
+                        }
+                    }
+                    ComparisonSource::Reference => {
+                        if let Some(ref_img) = &self.reference_image {
+                            if self.reference_texture.is_none() {
+                                let size = [ref_img.width() as usize, ref_img.height() as usize];
+                                let color_image = ColorImage::from_rgba_unmultiplied(size, ref_img.as_raw());
+                                let handle = ctx.load_texture(
+                                    "reference_viewport_image",
+                                    color_image,
+                                    TextureOptions::LINEAR,
+                                );
+                                self.reference_texture = Some(handle);
+                            }
+                        } else {
+                            self.reference_texture = None;
+                        }
+                    }
+                }
+            }
         } else {
             self.texture = None;
             self.last_texture_ptr = 0;
+            self.original_texture = None;
+            self.last_original_ptr = 0;
         }
     }
 
@@ -244,6 +334,11 @@ impl ImageViewerApp {
             }
             if i.modifiers.command && i.key_pressed(Key::Y) {
                 do_redo = true;
+            }
+
+            // Ctrl + D: 切換雙圖分割比對模式
+            if i.modifiers.command && i.key_pressed(Key::D) {
+                self.toggle_side_by_side();
             }
 
             // 圖片前後巡迴導覽 (左/右方向鍵, PageUp/PageDown, Home/End)
@@ -359,6 +454,8 @@ impl eframe::App for ImageViewerApp {
             can_redo,
             show_side_panel: &mut self.show_side_panel,
             show_filmstrip: &mut self.show_filmstrip,
+            is_side_by_side: &mut self.comparison.is_active,
+            sync_viewport: &mut self.comparison.sync_viewport,
         };
 
         if let Some(action) = MenuBar::show(ctx, &mut menu_state) {
@@ -465,7 +562,7 @@ impl eframe::App for ImageViewerApp {
             None => {}
         }
 
-        // 9. 中央 GPU 加速影像畫布
+        // 9. 中央 GPU 加速影像畫布 (支援單圖或雙圖分割對比)
         CentralPanel::default()
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
@@ -473,7 +570,52 @@ impl eframe::App for ImageViewerApp {
                     let img = s.active_image();
                     (img.width(), img.height())
                 });
-                CanvasView::show(ui, self.texture.as_ref(), dims, &mut self.viewport);
+
+                let (left_tex, left_dims) = match self.comparison.source {
+                    ComparisonSource::Original => {
+                        let l_dims = self.session.as_ref().map(|s| {
+                            let img = s.original_image();
+                            (img.width(), img.height())
+                        });
+                        (self.original_texture.as_ref(), l_dims)
+                    }
+                    ComparisonSource::Reference => {
+                        let l_dims = self.reference_image.as_ref().map(|img| (img.width(), img.height()));
+                        (self.reference_texture.as_ref(), l_dims)
+                    }
+                };
+
+                let mut canvas_state = CanvasState {
+                    texture: self.texture.as_ref(),
+                    image_dims: dims,
+                    viewport: &mut self.viewport,
+                    left_texture: left_tex,
+                    left_dims,
+                    left_viewport: &mut self.left_viewport,
+                    comparison: &mut self.comparison,
+                };
+
+                let mut comparison_action = None;
+                CanvasView::show(ui, &mut canvas_state, &mut comparison_action);
+
+                match comparison_action {
+                    Some(ComparisonAction::ToggleSync) => {
+                        self.comparison.sync_viewport = !self.comparison.sync_viewport;
+                        if self.comparison.sync_viewport {
+                            self.left_viewport = self.viewport;
+                        }
+                    }
+                    Some(ComparisonAction::SetSource(src)) => {
+                        self.comparison.source = src;
+                    }
+                    Some(ComparisonAction::OpenReferenceFile) => {
+                        self.open_reference_image_dialog();
+                    }
+                    Some(ComparisonAction::CloseComparison) => {
+                        self.comparison.is_active = false;
+                    }
+                    None => {}
+                }
             });
     }
 }

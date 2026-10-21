@@ -1,7 +1,7 @@
 //! 視口縮放、平移與雙圖同步狀態管理
 
 /// 視口縮放與平移狀態
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportState {
     /// 縮放倍率 (1.0 代表 100%)
     pub zoom: f32,

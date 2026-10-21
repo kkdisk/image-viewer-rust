@@ -42,7 +42,7 @@
 * 實作即時預覽防抖與 Session 管理（取消回滾、套用提交歷史、重設）。
 * 實作 Undo (Ctrl+Z) / Redo (Ctrl+Y)。
 * 實作左右分割的雙圖對照視圖（原圖對照 / 外部參考圖），視口操作雙向同步。
-* **Checkpoint 3**：能進行即時微調、取消/套用、復原/重做，並可在雙圖模式下同步平移縮放。
+* **Checkpoint 3**：[x] 通過。能進行即時微調、取消/套用、復原/重做，並可在雙圖模式下同步平移縮放。
 
 ### Phase 4: 重複圖片檢查器與壓縮包支援 (Duplicate Finder & Archive)
 * 實作 `duplicate-finder`（MD5、pHash、Union-Find 分群演算法與單元測試）。

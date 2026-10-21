@@ -19,6 +19,8 @@ pub struct MenuBarState<'a> {
     pub can_redo: bool,
     pub show_side_panel: &'a mut bool,
     pub show_filmstrip: &'a mut bool,
+    pub is_side_by_side: &'a mut bool,
+    pub sync_viewport: &'a mut bool,
 }
 
 /// 頂部主選單列
@@ -68,6 +70,11 @@ impl MenuBar {
                     ui.menu_button("檢視 (View)", |ui| {
                         ui.checkbox(state.show_side_panel, "側邊微調面板");
                         ui.checkbox(state.show_filmstrip, "底部縮圖列表 (Filmstrip)");
+                        ui.separator();
+                        ui.checkbox(state.is_side_by_side, "🔀 雙圖分割比對 (Side-by-Side)  Ctrl+D");
+                        if *state.is_side_by_side {
+                            ui.checkbox(state.sync_viewport, "  └ 🔗 同步平移與縮放");
+                        }
                         ui.separator();
                         if ui.button("🔍 100% 原始尺寸 (1)").clicked() {
                             triggered_action = Some(MenuAction::Reset100);
