@@ -54,6 +54,8 @@ pub struct ImageViewerApp {
     pub reference_image: Option<Arc<image::RgbaImage>>,
     /// 外部參考圖 GPU 紋理
     pub reference_texture: Option<TextureHandle>,
+    /// 受管理的壓縮檔瀏覽 Session
+    pub archive_session: Option<core_archive::ManagedArchiveSession>,
 }
 
 impl Default for ImageViewerApp {
@@ -77,6 +79,7 @@ impl Default for ImageViewerApp {
             last_original_ptr: 0,
             reference_image: None,
             reference_texture: None,
+            archive_session: None,
         }
     }
 }
@@ -89,19 +92,63 @@ impl ImageViewerApp {
         Self::default()
     }
 
-    /// 開啟指定路徑之影像，並自動掃描同目錄圖片加入清單
+    /// 開啟指定路徑之影像或壓縮檔（.zip / .7z）
+    pub fn open_file_path(&mut self, path: PathBuf) -> Result<(), String> {
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+
+        if ext == "zip" || ext == "7z" {
+            let session = core_archive::ManagedArchiveSession::open(&path)
+                .map_err(|e| format!("無法開啟壓縮檔: {}", e))?;
+
+            let first_img = session
+                .image_paths
+                .first()
+                .cloned()
+                .ok_or_else(|| "壓縮檔內未找到支援的圖片".to_string())?;
+
+            self.playlist.set_custom_list(session.image_paths.clone());
+            self.thumbnail_manager.clear();
+            self.archive_session = Some(session);
+
+            self.open_image_path(first_img)
+                .map_err(|e| format!("無法載入壓縮檔內圖片: {}", e))?;
+            Ok(())
+        } else {
+            // 若為一般圖片檔案
+            let is_in_archive = self
+                .archive_session
+                .as_ref()
+                .map(|arc| arc.is_from_archive(&path))
+                .unwrap_or(false);
+
+            if !is_in_archive {
+                self.archive_session = None;
+            }
+
+            self.open_image_path(path)
+                .map_err(|e| format!("無法載入圖片: {}", e))
+        }
+    }
+
+    /// 開啟指定路徑之影像，並視情況維護播放清單
     pub fn open_image_path(&mut self, path: PathBuf) -> Result<(), core_image::ImageError> {
         let dyn_img = core_image::load_image(&path)?;
         let rgba = dyn_img.to_rgba8();
 
-        // 檢查是否更換了目錄，若是則重新掃描
-        let current_dir = path.parent();
-        let prev_dir = self.session.as_ref().and_then(|s| s.source_path()).and_then(|p| p.parent());
+        // 若不是清單內切換，則更新目錄掃描
+        if !self.playlist.try_select_existing(&path) {
+            let current_dir = path.parent();
+            let prev_dir = self.session.as_ref().and_then(|s| s.source_path()).and_then(|p| p.parent());
 
-        if current_dir != prev_dir {
-            self.thumbnail_manager.clear();
+            if current_dir != prev_dir {
+                self.thumbnail_manager.clear();
+            }
+            self.playlist.scan_from_file(&path);
         }
-        self.playlist.scan_from_file(&path);
 
         self.session = Some(EditingSession::new(rgba, Some(path)));
         self.slider_params = AdjustmentParams::default();
@@ -118,12 +165,20 @@ impl ImageViewerApp {
     /// 彈出原生系統檔案選取對話框
     pub fn open_file_dialog(&mut self) {
         let file = rfd::FileDialog::new()
-            .add_filter("圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)", &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"])
+            .add_filter(
+                "支援的檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.zip, *.7z)",
+                &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif", "zip", "7z"],
+            )
+            .add_filter(
+                "圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)",
+                &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"],
+            )
+            .add_filter("壓縮檔案 (*.zip, *.7z)", &["zip", "7z"])
             .add_filter("所有檔案 (*.*)", &["*"])
             .pick_file();
 
         if let Some(path) = file {
-            let _ = self.open_image_path(path);
+            let _ = self.open_file_path(path);
         }
     }
 
@@ -257,8 +312,42 @@ impl ImageViewerApp {
         }
     }
 
+    /// 檢查目前開啟的圖片是否來自壓縮包暫存目錄
+    pub fn is_current_image_from_archive(&self) -> bool {
+        if let Some(session) = &self.session
+            && let Some(path) = session.source_path()
+        {
+            return self
+                .archive_session
+                .as_ref()
+                .map(|arc| arc.is_from_archive(path))
+                .unwrap_or(false);
+        }
+        false
+    }
+
+    /// 將目前影像原子寫入指定目標路徑並更新狀態
+    pub fn save_image_to(&mut self, target_path: &std::path::Path) -> bool {
+        if let Some(session) = &mut self.session {
+            let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
+            if core_image::save_image_atomic(&dyn_img, target_path).is_ok() {
+                session.set_source_path(target_path.to_path_buf());
+                session.mark_saved();
+                self.playlist.scan_from_file(target_path);
+                return true;
+            }
+        }
+        false
+    }
+
     /// 原地原子儲存已提交之影像
     pub fn save_current_image(&mut self) -> bool {
+        if self.is_current_image_from_archive() {
+            // 若當前檔案來自壓縮包，嚴禁原地覆寫，強制導向另存新檔！
+            self.save_image_as_dialog();
+            return false;
+        }
+
         if let Some(session) = &mut self.session {
             if let Some(path) = session.source_path().map(|p| p.to_path_buf()) {
                 let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
@@ -269,7 +358,7 @@ impl ImageViewerApp {
             } else {
                 // 若無來源路徑則轉為另存新檔
                 self.save_image_as_dialog();
-                return true;
+                return false;
             }
         }
         false
@@ -434,7 +523,7 @@ impl eframe::App for ImageViewerApp {
         // 1. 處理全域檔案拖曳放入
         ctx.input(|i| {
             if let Some(path) = i.raw.dropped_files.first().and_then(|d| d.path.as_ref()) {
-                let _ = self.open_image_path(path.clone());
+                let _ = self.open_file_path(path.clone());
             }
         });
 

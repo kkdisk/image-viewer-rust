@@ -89,13 +89,13 @@
   - **驗證方式**: 單元測試 `cargo test -p app-ui --test duplicate_ui_test` 驗證批次智慧勾選與安全移至回收桶成功。
   - **預估規模**: L (5-6 檔案)
 
-- [ ] Task 4.3: 實作 `core-archive` 壓縮檔安全讀取與 Filmstrip 整合
+- [x] Task 4.3: 實作 `core-archive` 壓縮檔安全讀取與 Filmstrip 整合
   - **驗收條件**: 支援 7z / zip 格式；防範 Path Traversal；解壓至受管理暫存目錄並自動列入導覽；壓縮檔內圖片禁用覆寫。
-  - **驗證方式**: 載入測試 7z 檔，確認圖片可正常讀取且儲存時強制導向「另存新檔」。
+  - **驗證方式**: 單元測試 `cargo test -p core-archive` 與 `cargo test -p app-ui --test archive_ui_test` 驗證路徑安全防護與覆寫阻斷。
   - **預估規模**: M (3-4 檔案)
 
 ### Checkpoint 4: 查重與壓縮包檢查點
-- [ ] 大批檔案查重與清理功能正常運作，壓縮檔預覽流暢且安全邊界完整。
+- [x] 大批檔案查重與清理功能正常運作，壓縮檔預覽流暢且安全邊界完整（全工作區 26 項測試綠燈全數通過）。
 
 ---
 

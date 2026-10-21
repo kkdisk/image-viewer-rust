@@ -73,6 +73,23 @@ impl ImagePlaylist {
         self.current_dir = Some(parent);
     }
 
+    /// 設定自訂圖片清單（如從壓縮包解壓出的圖片集）
+    pub fn set_custom_list(&mut self, files: Vec<PathBuf>) {
+        self.files = files;
+        self.current_index = if self.files.is_empty() { None } else { Some(0) };
+        self.current_dir = None;
+    }
+
+    /// 在現有清單中更新目前檔案之索引（若檔案已在清單中則不重新掃描目錄）
+    pub fn try_select_existing(&mut self, current_file: &Path) -> bool {
+        if let Some(idx) = self.files.iter().position(|p| p == current_file) {
+            self.current_index = Some(idx);
+            true
+        } else {
+            false
+        }
+    }
+
     /// 取得檔案總數
     pub fn len(&self) -> usize {
         self.files.len()
