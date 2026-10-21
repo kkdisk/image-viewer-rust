@@ -11,6 +11,8 @@ impl MenuBar {
         on_save_file: &mut impl FnMut(),
         show_side_panel: &mut bool,
         show_filmstrip: &mut bool,
+        do_reset_100: &mut bool,
+        do_reset_fit: &mut bool,
     ) {
         TopBottomPanel::top("top_menu_bar")
             .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::symmetric(10.0, 4.0)))
@@ -35,10 +37,12 @@ impl MenuBar {
                         ui.checkbox(show_side_panel, "側邊微調面板");
                         ui.checkbox(show_filmstrip, "底部縮圖列表 (Filmstrip)");
                         ui.separator();
-                        if ui.button("🔍 100% 原始尺寸").clicked() {
+                        if ui.button("🔍 100% 原始尺寸 (1)").clicked() {
+                            *do_reset_100 = true;
                             ui.close_menu();
                         }
-                        if ui.button("📐 符合視窗 (Fit Window)").clicked() {
+                        if ui.button("📐 符合視窗 (0 / F)").clicked() {
+                            *do_reset_fit = true;
                             ui.close_menu();
                         }
                     });

@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "app-ui"
 version.workspace = true
 edition.workspace = true
@@ -13,3 +13,4 @@ egui = "0.29"
 image.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+rfd.workspace = true

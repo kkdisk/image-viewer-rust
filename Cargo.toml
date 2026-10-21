@@ -1,4 +1,4 @@
-﻿[workspace]
+[workspace]
 resolver = "3"
 members = [
     "crates/core-image",
@@ -26,6 +26,7 @@ trash = "5.2"
 sevenz-rust = "0.6"
 zip = "2.2"
 tempfile = "3.13"
+rfd = "0.15"
 
 [profile.release]
 opt-level = 3
