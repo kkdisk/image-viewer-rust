@@ -1,0 +1,11 @@
+﻿[package]
+name = "core-archive"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sevenz-rust.workspace = true
+zip.workspace = true
+trash.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true

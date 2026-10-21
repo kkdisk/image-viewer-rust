@@ -1,0 +1,34 @@
+﻿[workspace]
+resolver = "3"
+members = [
+    "crates/core-image",
+    "crates/core-archive",
+    "crates/duplicate-finder",
+    "crates/viewer-state",
+    "crates/app-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Image Viewer Contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "gif", "tiff", "webp"] }
+rayon = "1.10"
+tokio = { version = "1.40", features = ["full"] }
+thiserror = "2.0"
+anyhow = "1.0"
+kamadak-exif = "0.5"
+md-5 = "0.10"
+trash = "5.2"
+sevenz-rust = "0.6"
+zip = "2.2"
+tempfile = "3.13"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

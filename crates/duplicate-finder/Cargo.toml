@@ -1,0 +1,11 @@
+﻿[package]
+name = "duplicate-finder"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+core-image = { path = "../core-image" }
+md-5.workspace = true
+image.workspace = true
+rayon.workspace = true
+thiserror.workspace = true

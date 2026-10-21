@@ -1,0 +1,15 @@
+﻿[package]
+name = "app-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+core-image = { path = "../core-image" }
+core-archive = { path = "../core-archive" }
+duplicate-finder = { path = "../duplicate-finder" }
+viewer-state = { path = "../viewer-state" }
+eframe = "0.29"
+egui = "0.29"
+image.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
