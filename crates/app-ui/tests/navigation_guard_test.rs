@@ -42,6 +42,12 @@ fn archive_completion_after_edit_requires_confirmation() {
     let (dir, mut app) = fixture();
     let zip_path = archive_fixture(dir.path());
     app.open_file_path(zip_path).unwrap();
+    let start = std::time::Instant::now();
+    while app.latest_archive_req_id == 0 {
+        app.poll_document_io();
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     edit(&mut app);
     assert!(app.wait_archive_loaded(std::time::Duration::from_secs(5)));
     assert!(app.has_pending_leave());
@@ -49,7 +55,7 @@ fn archive_completion_after_edit_requires_confirmation() {
     assert_eq!(app.playlist.current_index(), Some(0));
     assert!(!app.is_current_image_from_archive());
     assert!(app.resolve_pending_leave(LeaveChoice::Discard).unwrap());
-    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+    assert!(app.wait_archive_loaded(std::time::Duration::from_secs(5)));
     assert!(app.is_current_image_from_archive());
     assert_eq!(
         app.session.as_ref().unwrap().active_image().get_pixel(0, 0)[0],
