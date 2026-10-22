@@ -20,5 +20,12 @@
 - \ef_algorithms/\：自舊專案移植之演算法參考資產
 
 ## 開發與進度
+
+圖片、參考圖解碼與目錄掃描在背景執行；連續切圖只接受最新請求。儲存採已套用影像的快照，完成前暫停編輯與切圖；儲存失敗或取消另存會保留目前工作。
+
+偏好設定預設存於 `%APPDATA%/rust_image_viewer/config.json`，使用 `app-ui.exe --portable` 時改存於執行檔旁。設定包含視窗大小與最大化、面板、直方圖、放大鏡及微調區塊開關，採背景原子寫入。損毀或不支援的設定版本會保留原檔，該次啟動使用預設值並停止寫入設定。
+
+Windows 自動檢查與標籤建置流程見 [Windows 建置與驗收](docs/WINDOWS_BUILD.md)。
+
 詳細規格請參閱 [docs/SPEC_RUST_IMAGE_VIEWER.md](docs/SPEC_RUST_IMAGE_VIEWER.md)。
 開發進度與任務追蹤請參閱 [tasks/todo.md](tasks/todo.md)。
