@@ -4,6 +4,8 @@
 **版本**：1.0.0  
 **日期**：2026-10-21  
 **0.4.0／0.5.0 補充契約**：[資源與瀏覽](SPEC_BROWSING_RESOURCES.md)
+**0.5.x 補充契約**：[看圖便利操作](SPEC_VIEWING_CONVENIENCE.md)
+**0.5.2 補充契約**：[高品質放大](SPEC_HIGH_QUALITY_ZOOM.md)
 **關聯意圖**：[docs/intent/rust_image_viewer_migration.md](docs/intent/rust_image_viewer_migration.md)
 
 ---

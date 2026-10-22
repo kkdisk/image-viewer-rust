@@ -1,7 +1,8 @@
 ﻿# Rust Image Viewer (純 Rust 輕量高效圖片瀏覽與編輯工具)
 
 ## 簡介
-本專案為使用純 Rust (\gui\ + \frame\ + \ayon\) 開發的高效能桌面圖片瀏覽、非破壞式編輯與重複圖片管理工具。
+本專案為使用純 Rust (\gui\ + \frame\ + \
+ayon\) 開發的高效能桌面圖片瀏覽、非破壞式編輯與重複圖片管理工具。
 
 ## 特色
 - **極致輕量**：單一原生二進位檔（< 15MB），冷啟動時間 < 50ms。
@@ -17,9 +18,14 @@
 - \crates/duplicate-finder\：pHash、MD5、Union-Find 分群
 - \crates/viewer-state\：非破壞式 Session、In-Memory Undo/Redo
 - \crates/app-ui\：桌面應用進入點與 egui 畫布元件
-- \ef_algorithms/\：自舊專案移植之演算法參考資產
+- \
+ef_algorithms/\：自舊專案移植之演算法參考資產
 
 ## 開發與進度
+
+v0.5.2 提供「檢視 → 縮放取樣」的快速／高品質／像素模式。預設高品質，縮放或拖曳停止 150 毫秒後背景雙三次重繪可見區域；模式會記住，主圖及雙圖比較共用，原圖與儲存結果不變。[取樣規格及驗收邊界](docs/SPEC_HIGH_QUALITY_ZOOM.md)。
+
+v0.5.1 便利操作：由「檢視」開啟唯讀資訊、F5 重新整理、空白鍵播放／停止全螢幕幻燈片、Delete 移至回收桶；「編輯」提供 90 度旋轉／翻轉與複製路徑（Ctrl+Shift+C）。旋轉可 Undo／Redo，JPEG 儲存會提示重新壓縮；預設刪除前確認，無回收桶則拒絕刪除。幻燈片間隔、循環、隨機及刪除確認可由「檢視」調整。[完整契約及待驗項目](docs/SPEC_VIEWING_CONVENIENCE.md)。
 
 開發工具鏈固定為 Rust 1.99.1（最低支援版本），由 `rust-toolchain.toml` 選用；Windows 需具備 Visual Studio C++ Build Tools 與 Windows SDK。
 
