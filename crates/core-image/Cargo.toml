@@ -2,6 +2,7 @@
 name = "core-image"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 image.workspace = true

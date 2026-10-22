@@ -2,6 +2,7 @@
 name = "core-archive"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 sevenz-rust.workspace = true

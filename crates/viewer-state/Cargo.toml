@@ -2,6 +2,7 @@
 name = "viewer-state"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 core-image = { path = "../core-image" }

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $workspacePath = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $workspacePath
 try {
@@ -12,7 +12,7 @@ try {
     }
     $executable = Join-Path $metadata.target_directory 'release/app-ui.exe'
     $size = (Get-Item -LiteralPath $executable).Length
-    if ($size -ge 15MB) { throw "執行檔超過體積限制：$size 位元組" }
+    if ($size -ge 15000000) { throw "執行檔超過 15 MB（15,000,000 位元組）體積限制：$size 位元組" }
     New-Item -ItemType Directory -Path dist -Force | Out-Null
     $archive = "dist/rust-image-viewer-$version-windows-x64.zip"
     Compress-Archive -LiteralPath $executable -DestinationPath $archive -Force

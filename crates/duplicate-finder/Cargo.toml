@@ -2,6 +2,7 @@
 name = "duplicate-finder"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 core-image = { path = "../core-image" }

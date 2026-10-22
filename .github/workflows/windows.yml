@@ -24,8 +24,7 @@ jobs:
           persist-credentials: false
       - name: 安裝 Rust 工具
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: 格式檢查
         run: cargo fmt --all --check
       - name: 靜態分析
