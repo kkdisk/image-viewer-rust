@@ -176,12 +176,8 @@ pub fn apply_adjustments_rgba(img: &RgbaImage, params: &AdjustmentParams) -> Rgb
     let channels = 4;
 
     // 先套用白平衡
-    let wb_applied = apply_white_balance_raw(
-        img.as_raw(),
-        channels,
-        params.temperature,
-        params.tint,
-    );
+    let wb_applied =
+        apply_white_balance_raw(img.as_raw(), channels, params.temperature, params.tint);
 
     // 再套用細部微調 (亮度、對比、飽和度)
     let fine_tuned = apply_fine_tune_raw(
@@ -194,8 +190,7 @@ pub fn apply_adjustments_rgba(img: &RgbaImage, params: &AdjustmentParams) -> Rgb
         params.saturation,
     );
 
-    RgbaImage::from_raw(width, height, fine_tuned)
-        .unwrap_or_else(|| img.clone())
+    RgbaImage::from_raw(width, height, fine_tuned).unwrap_or_else(|| img.clone())
 }
 
 /// 對 DynamicImage 套用完整的微調參數管線
@@ -207,4 +202,98 @@ pub fn apply_adjustments(img: &DynamicImage, params: &AdjustmentParams) -> Dynam
     let rgba = img.to_rgba8();
     let adjusted_rgba = apply_adjustments_rgba(&rgba, params);
     DynamicImage::ImageRgba8(adjusted_rgba)
+}
+
+/// 256 色階直方圖數據 (RGB 與感知亮度)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistogramData {
+    pub r: [u32; 256],
+    pub g: [u32; 256],
+    pub b: [u32; 256],
+    pub luma: [u32; 256],
+    pub max_count: u32,
+}
+
+impl Default for HistogramData {
+    fn default() -> Self {
+        Self {
+            r: [0; 256],
+            g: [0; 256],
+            b: [0; 256],
+            luma: [0; 256],
+            max_count: 0,
+        }
+    }
+}
+
+type PartialHistogram = ([u32; 256], [u32; 256], [u32; 256], [u32; 256]);
+
+impl HistogramData {
+    /// 自 RgbaImage 高速計算 RGB 與亮度直方圖數據（使用 Rayon 平行統計多區塊）
+    pub fn compute_from_rgba(img: &RgbaImage) -> Self {
+        let raw = img.as_raw();
+        let pixel_count = raw.len() / 4;
+        if pixel_count == 0 {
+            return Self::default();
+        }
+
+        // 採用 Rayon chunks 平行統計後合併
+        let chunk_size = 4096 * 4;
+        let partial_hists: Vec<PartialHistogram> = raw
+            .par_chunks(chunk_size)
+            .map(|chunk| {
+                let mut r = [0u32; 256];
+                let mut g = [0u32; 256];
+                let mut b = [0u32; 256];
+                let mut luma = [0u32; 256];
+
+                for pixel in chunk.chunks_exact(4) {
+                    let pr = pixel[0] as usize;
+                    let pg = pixel[1] as usize;
+                    let pb = pixel[2] as usize;
+
+                    r[pr] += 1;
+                    g[pg] += 1;
+                    b[pb] += 1;
+
+                    // 感知亮度：Y = 0.299*R + 0.587*G + 0.114*B (定點近似: (77*R + 150*G + 29*B) >> 8)
+                    let py = ((77 * pr + 150 * pg + 29 * pb) >> 8).min(255);
+                    luma[py] += 1;
+                }
+
+                (r, g, b, luma)
+            })
+            .collect();
+
+        let mut total_r = [0u32; 256];
+        let mut total_g = [0u32; 256];
+        let mut total_b = [0u32; 256];
+        let mut total_luma = [0u32; 256];
+
+        for (pr, pg, pb, pl) in partial_hists {
+            for i in 0..256 {
+                total_r[i] += pr[i];
+                total_g[i] += pg[i];
+                total_b[i] += pb[i];
+                total_luma[i] += pl[i];
+            }
+        }
+
+        let mut max_count = 0u32;
+        for i in 0..256 {
+            max_count = max_count
+                .max(total_r[i])
+                .max(total_g[i])
+                .max(total_b[i])
+                .max(total_luma[i]);
+        }
+
+        Self {
+            r: total_r,
+            g: total_g,
+            b: total_b,
+            luma: total_luma,
+            max_count,
+        }
+    }
 }

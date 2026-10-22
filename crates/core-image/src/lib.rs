@@ -12,13 +12,13 @@ pub use exif::{
     apply_orientation, read_orientation, read_orientation_from_bytes, read_orientation_from_file,
 };
 pub use io::{
-    check_pixel_limit, inspect_dimensions, inspect_dimensions_from_memory, load_image,
-    load_image_from_memory, load_image_from_memory_with_limit, load_image_with_limit,
-    save_image_atomic, MAX_SAFE_PIXELS,
+    MAX_SAFE_PIXELS, check_pixel_limit, inspect_dimensions, inspect_dimensions_from_memory,
+    load_image, load_image_from_memory, load_image_from_memory_with_limit, load_image_with_limit,
+    save_image_atomic,
 };
 pub use ops::{
-    apply_adjustments, apply_adjustments_rgba, apply_fine_tune_raw, apply_white_balance_raw,
-    AdjustmentParams,
+    AdjustmentParams, HistogramData, apply_adjustments, apply_adjustments_rgba,
+    apply_fine_tune_raw, apply_white_balance_raw,
 };
 
 /// 取得 core-image 模組版本

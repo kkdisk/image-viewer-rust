@@ -1,19 +1,14 @@
 //! 單元與整合測試：Rayon 像素運算管線（白平衡、微調）與原子存檔
 
 use core_image::{
-    apply_adjustments, apply_adjustments_rgba, apply_fine_tune_raw, apply_white_balance_raw,
-    load_image, save_image_atomic, AdjustmentParams,
+    AdjustmentParams, apply_adjustments, apply_adjustments_rgba, apply_fine_tune_raw,
+    apply_white_balance_raw, load_image, save_image_atomic,
 };
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
 use tempfile::tempdir;
 
 /// 原始演算法之白平衡實作（用於驗證誤差 < 1e-4）
-fn ref_white_balance(
-    image_bytes: &[u8],
-    channels: usize,
-    temp: i32,
-    tint: i32,
-) -> Vec<u8> {
+fn ref_white_balance(image_bytes: &[u8], channels: usize, temp: i32, tint: i32) -> Vec<u8> {
     let mut result = image_bytes.to_vec();
     let temp_factor = temp as f32 / 100.0;
     let tint_factor = tint as f32 / 100.0;
@@ -254,4 +249,22 @@ fn test_save_image_atomic() {
     save_image_atomic(&dyn_img2, &target_file).expect("覆寫現有檔案之原子存檔應成功");
     let loaded2 = load_image(&target_file).expect("讀取覆寫後檔案失敗");
     assert_eq!(loaded2.dimensions(), (20, 20));
+}
+
+#[test]
+fn test_histogram_computation() {
+    let mut img = RgbaImage::new(10, 10);
+    // 填為純紅 (255, 0, 0, 255)
+    for pixel in img.pixels_mut() {
+        *pixel = Rgba([255, 0, 0, 255]);
+    }
+
+    let hist = core_image::HistogramData::compute_from_rgba(&img);
+    assert_eq!(hist.r[255], 100);
+    assert_eq!(hist.r[0], 0);
+    assert_eq!(hist.g[0], 100);
+    assert_eq!(hist.b[0], 100);
+    // 純紅感知亮度: (77 * 255) >> 8 = 76
+    assert_eq!(hist.luma[76], 100);
+    assert_eq!(hist.max_count, 100);
 }
