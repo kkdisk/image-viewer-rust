@@ -69,7 +69,7 @@ impl HistogramWidget {
             painter.rect_stroke(
                 rect,
                 Rounding::same(4.0),
-                Stroke::new(1.0, ThemeColors::BORDER),
+                Stroke::new(1.0_f32, ThemeColors::BORDER),
             );
 
             // 輔助網格線 (25%, 50%, 75%)
@@ -78,12 +78,12 @@ impl HistogramWidget {
                 let x = rect.left() + rect.width() * ratio;
                 painter.line_segment(
                     [pos2(x, rect.top()), pos2(x, rect.bottom())],
-                    Stroke::new(1.0, grid_color),
+                    Stroke::new(1.0_f32, grid_color),
                 );
                 let y = rect.top() + rect.height() * ratio;
                 painter.line_segment(
                     [pos2(rect.left(), y), pos2(rect.right(), y)],
-                    Stroke::new(1.0, grid_color),
+                    Stroke::new(1.0_f32, grid_color),
                 );
             }
 
@@ -148,7 +148,8 @@ impl HistogramWidget {
 
                             // 頂部折線輪廓
                             for w in points.windows(2) {
-                                painter.line_segment([w[0], w[1]], Stroke::new(1.2, stroke_color));
+                                painter
+                                    .line_segment([w[0], w[1]], Stroke::new(1.2_f32, stroke_color));
                             }
                         };
 

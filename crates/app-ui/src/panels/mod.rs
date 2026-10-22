@@ -57,13 +57,13 @@ impl MenuBar {
                 menu_style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
                 menu_style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
                 menu_style.visuals.widgets.inactive.fg_stroke =
-                    Stroke::new(1.0, Color32::from_rgb(235, 235, 242));
+                    Stroke::new(1.0_f32, Color32::from_rgb(235, 235, 242));
                 menu_style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 45, 52);
                 menu_style.visuals.widgets.hovered.bg_stroke = Stroke::NONE;
-                menu_style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+                menu_style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
                 menu_style.visuals.widgets.open.bg_fill = ThemeColors::ACCENT;
                 menu_style.visuals.widgets.open.bg_stroke = Stroke::NONE;
-                menu_style.visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+                menu_style.visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
                 menu_style.spacing.button_padding = egui::vec2(8.0, 4.0);
 
                 menu::bar(ui, |ui| {
@@ -174,7 +174,7 @@ impl AboutDialog {
                 egui::Frame::window(&ctx.style())
                     .fill(ThemeColors::BG_PANEL)
                     .inner_margin(Margin::same(20.0))
-                    .stroke(Stroke::new(1.0, ThemeColors::BORDER))
+                    .stroke(Stroke::new(1.0_f32, ThemeColors::BORDER))
                     .rounding(Rounding::same(8.0)),
             )
             .show(ctx, |ui| {
@@ -188,9 +188,13 @@ impl AboutDialog {
                             .color(ThemeColors::TEXT_PRIMARY),
                     );
                     ui.label(
-                        RichText::new("版本 v0.1.0 (Rust 2024 Edition)")
-                            .size(12.0)
-                            .color(ThemeColors::ACCENT),
+                        RichText::new(concat!(
+                            "版本 v",
+                            env!("CARGO_PKG_VERSION"),
+                            " (Rust 2024 Edition)"
+                        ))
+                        .size(12.0)
+                        .color(ThemeColors::ACCENT),
                     );
                 });
 

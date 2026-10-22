@@ -163,7 +163,7 @@ impl CanvasView {
                     pos2(split_line_x, rect.min.y),
                     pos2(split_line_x, rect.max.y),
                 ],
-                Stroke::new(2.0, ThemeColors::BORDER),
+                Stroke::new(2.0_f32, ThemeColors::BORDER),
             );
 
             // 繪製頂部浮動對比控制條 (Floating HUD)
@@ -238,7 +238,7 @@ impl CanvasView {
             painter.rect_stroke(
                 image_rect,
                 0.0,
-                Stroke::new(1.0, Color32::from_white_alpha(35)),
+                Stroke::new(1.0_f32, Color32::from_white_alpha(35)),
             );
 
             // 處理滑鼠拖曳平移
@@ -321,7 +321,7 @@ impl CanvasView {
             painter.rect_stroke(
                 badge_rect,
                 Rounding::same(12.0),
-                Stroke::new(1.0, ThemeColors::BORDER),
+                Stroke::new(1.0_f32, ThemeColors::BORDER),
             );
             painter.galley(
                 pos2(badge_pos.x + 8.0, badge_pos.y + 4.0),
@@ -352,7 +352,7 @@ impl CanvasView {
         ui.painter().rect_stroke(
             hud_rect,
             Rounding::same(18.0),
-            Stroke::new(1.0, ThemeColors::BORDER),
+            Stroke::new(1.0_f32, ThemeColors::BORDER),
         );
 
         ui.allocate_new_ui(UiBuilder::new().max_rect(hud_rect), |ui| {

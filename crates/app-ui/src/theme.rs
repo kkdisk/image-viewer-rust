@@ -80,33 +80,33 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     // 元件外觀 (Widgets)
     visuals.widgets.noninteractive.bg_fill = ThemeColors::BG_WIDGET;
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, ThemeColors::BORDER);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, ThemeColors::TEXT_SECONDARY);
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, ThemeColors::BORDER);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, ThemeColors::TEXT_SECONDARY);
     visuals.widgets.noninteractive.rounding = rounding;
 
     visuals.widgets.inactive.bg_fill = ThemeColors::BG_WIDGET;
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, ThemeColors::BORDER);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, ThemeColors::TEXT_PRIMARY);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, ThemeColors::BORDER);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, ThemeColors::TEXT_PRIMARY);
     visuals.widgets.inactive.rounding = rounding;
 
     visuals.widgets.hovered.bg_fill = ThemeColors::BG_WIDGET_HOVER;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ThemeColors::ACCENT_HOVER);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ThemeColors::ACCENT_HOVER);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     visuals.widgets.hovered.rounding = rounding;
 
     visuals.widgets.active.bg_fill = ThemeColors::BG_WIDGET_ACTIVE;
-    visuals.widgets.active.bg_stroke = Stroke::new(1.5, ThemeColors::ACCENT);
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, ThemeColors::ACCENT);
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     visuals.widgets.active.rounding = rounding;
 
     visuals.widgets.open.bg_fill = ThemeColors::BG_WIDGET_HOVER;
-    visuals.widgets.open.bg_stroke = Stroke::new(1.0, ThemeColors::BORDER);
-    visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, ThemeColors::BORDER);
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, Color32::WHITE);
     visuals.widgets.open.rounding = rounding;
 
     // 陰影與選取高亮
     visuals.selection.bg_fill = ThemeColors::ACCENT;
-    visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
     visuals.window_shadow = Shadow::NONE;
     visuals.popup_shadow = Shadow::NONE;
 

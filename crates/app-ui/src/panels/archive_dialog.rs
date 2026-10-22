@@ -62,7 +62,7 @@ impl<'a> ArchivePasswordDialog<'a> {
             .frame(
                 egui::Frame::window(&ctx.style())
                     .fill(Color32::from_rgb(26, 26, 30))
-                    .stroke(Stroke::new(1.5, ThemeColors::ACCENT))
+                    .stroke(Stroke::new(1.5_f32, ThemeColors::ACCENT))
                     .rounding(Rounding::same(8.0))
                     .inner_margin(Margin::same(16.0)),
             )

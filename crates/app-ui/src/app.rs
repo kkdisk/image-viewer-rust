@@ -1194,7 +1194,10 @@ impl eframe::App for ImageViewerApp {
                 .frame(
                     egui::Frame::window(&ctx.style())
                         .fill(egui::Color32::from_rgb(26, 26, 32))
-                        .stroke(egui::Stroke::new(1.5, crate::theme::ThemeColors::ACCENT))
+                        .stroke(egui::Stroke::new(
+                            1.5_f32,
+                            crate::theme::ThemeColors::ACCENT,
+                        ))
                         .rounding(egui::Rounding::same(8.0))
                         .inner_margin(egui::Margin::same(16.0)),
                 )

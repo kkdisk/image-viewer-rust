@@ -145,11 +145,11 @@ impl FilmstripPanel {
 
                                 // 邊框高亮
                                 let border_stroke = if is_selected {
-                                    Stroke::new(2.0, ThemeColors::ACCENT)
+                                    Stroke::new(2.0_f32, ThemeColors::ACCENT)
                                 } else if response.hovered() {
-                                    Stroke::new(1.0, ThemeColors::ACCENT_HOVER)
+                                    Stroke::new(1.0_f32, ThemeColors::ACCENT_HOVER)
                                 } else {
-                                    Stroke::new(1.0, ThemeColors::BORDER)
+                                    Stroke::new(1.0_f32, ThemeColors::BORDER)
                                 };
                                 ui.painter()
                                     .rect_stroke(rect, Rounding::same(4.0), border_stroke);

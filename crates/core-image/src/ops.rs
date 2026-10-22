@@ -247,7 +247,9 @@ impl HistogramData {
                 let mut b = [0u32; 256];
                 let mut luma = [0u32; 256];
 
-                for pixel in chunk.chunks_exact(4) {
+                let mut pixels = chunk;
+                while let Some((pixel, remaining)) = pixels.split_first_chunk::<4>() {
+                    pixels = remaining;
                     let pr = pixel[0] as usize;
                     let pg = pixel[1] as usize;
                     let pb = pixel[2] as usize;

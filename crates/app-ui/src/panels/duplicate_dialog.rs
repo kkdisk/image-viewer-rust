@@ -539,7 +539,7 @@ impl DuplicateFinderDialog {
                 Frame::window(&ctx.style())
                     .fill(Color32::from_rgb(28, 30, 36))
                     .inner_margin(Margin::same(14.0))
-                    .stroke(Stroke::new(1.5, Color32::from_rgb(75, 82, 98)))
+                    .stroke(Stroke::new(1.5_f32, Color32::from_rgb(75, 82, 98)))
                     .rounding(Rounding::same(10.0)),
             )
             .show(ctx, |ui| {
@@ -832,7 +832,7 @@ impl DuplicateFinderDialog {
                                                 Color32::from_rgb(34, 36, 44)
                                             })
                                             .stroke(Stroke::new(
-                                                1.0,
+                                                1.0_f32,
                                                 if is_active_group {
                                                     Color32::from_rgb(96, 165, 250)
                                                 } else {
@@ -1083,7 +1083,7 @@ impl DuplicateFinderDialog {
                 .frame(
                     Frame::window(&ctx.style())
                         .fill(ThemeColors::BG_PANEL)
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(220, 38, 38)))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(220, 38, 38)))
                         .rounding(Rounding::same(8.0))
                         .inner_margin(Margin::same(16.0)),
                 )
@@ -1170,7 +1170,7 @@ fn render_preview_card(
     ui.painter().rect_stroke(
         rect,
         Rounding::same(6.0),
-        Stroke::new(1.0, ThemeColors::BORDER),
+        Stroke::new(1.0_f32, ThemeColors::BORDER),
     );
 
     if let Some(tex) = state.get_or_load_preview(ctx, &item.path) {

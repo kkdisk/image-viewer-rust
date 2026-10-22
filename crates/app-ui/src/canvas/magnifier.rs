@@ -85,7 +85,7 @@ impl MagnifierWidget {
         painter.rect_stroke(
             window_rect,
             Rounding::same(8.0),
-            Stroke::new(1.0, ThemeColors::BORDER_FOCUS),
+            Stroke::new(1.0_f32, ThemeColors::BORDER_FOCUS),
         );
 
         // 2. 視窗頂部標題列
@@ -141,7 +141,7 @@ impl MagnifierWidget {
                     painter.rect_stroke(
                         cell_rect,
                         0.0,
-                        Stroke::new(0.5, Color32::from_black_alpha(70)),
+                        Stroke::new(0.5_f32, Color32::from_black_alpha(70)),
                     );
                 }
 
@@ -150,7 +150,7 @@ impl MagnifierWidget {
                     painter.rect_stroke(
                         cell_rect,
                         0.0,
-                        Stroke::new(2.0, Color32::from_rgb(0, 229, 255)),
+                        Stroke::new(2.0_f32, Color32::from_rgb(0, 229, 255)),
                     );
 
                     // 準星十字線
@@ -161,14 +161,14 @@ impl MagnifierWidget {
                             pos2(center_pt.x - cross_len, center_pt.y),
                             pos2(center_pt.x + cross_len, center_pt.y),
                         ],
-                        Stroke::new(1.0, Color32::WHITE),
+                        Stroke::new(1.0_f32, Color32::WHITE),
                     );
                     painter.line_segment(
                         [
                             pos2(center_pt.x, center_pt.y - cross_len),
                             pos2(center_pt.x, center_pt.y + cross_len),
                         ],
-                        Stroke::new(1.0, Color32::WHITE),
+                        Stroke::new(1.0_f32, Color32::WHITE),
                     );
                 }
             }
@@ -178,7 +178,7 @@ impl MagnifierWidget {
         painter.rect_stroke(
             grid_rect,
             Rounding::same(2.0),
-            Stroke::new(1.0, Color32::from_white_alpha(40)),
+            Stroke::new(1.0_f32, Color32::from_white_alpha(40)),
         );
 
         // 4. 底部色彩資訊列
@@ -199,7 +199,7 @@ impl MagnifierWidget {
         painter.rect_stroke(
             swatch_rect,
             Rounding::same(3.0),
-            Stroke::new(1.0, Color32::from_white_alpha(100)),
+            Stroke::new(1.0_f32, Color32::from_white_alpha(100)),
         );
 
         // 顏色 Hex 碼與 RGBA 標籤

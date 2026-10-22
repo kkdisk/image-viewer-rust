@@ -268,3 +268,34 @@ fn test_histogram_computation() {
     assert_eq!(hist.luma[76], 100);
     assert_eq!(hist.max_count, 100);
 }
+
+#[test]
+fn histogram_counts_empty_images_and_pixels_across_parallel_chunk_boundaries() {
+    for width in [0, 1, 4095, 4096, 4097, 8193] {
+        let img = RgbaImage::from_fn(width, 1, |x, _| {
+            Rgba([
+                (x % 256) as u8,
+                ((x * 3) % 256) as u8,
+                ((x * 7) % 256) as u8,
+                (x % 256) as u8,
+            ])
+        });
+        let hist = core_image::HistogramData::compute_from_rgba(&img);
+        let mut expected = [[0u32; 256]; 4];
+        for pixel in img.pixels() {
+            let [r, g, b, _] = pixel.0.map(usize::from);
+            expected[0][r] += 1;
+            expected[1][g] += 1;
+            expected[2][b] += 1;
+            expected[3][(77 * r + 150 * g + 29 * b) >> 8] += 1;
+        }
+        assert_eq!(hist.r, expected[0]);
+        assert_eq!(hist.g, expected[1]);
+        assert_eq!(hist.b, expected[2]);
+        assert_eq!(hist.luma, expected[3]);
+        assert_eq!(
+            hist.max_count,
+            expected.iter().flatten().copied().max().unwrap_or(0)
+        );
+    }
+}
