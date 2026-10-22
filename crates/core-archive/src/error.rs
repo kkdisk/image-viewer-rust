@@ -25,18 +25,35 @@ pub enum ArchiveError {
     #[error("壓縮檔中未包含任何支援的圖片檔案")]
     NoImagesFound,
 
+    #[error("超出解壓縮安全限制 (Zip-bomb 防護): {0}")]
+    LimitExceeded(String),
+
     #[error("不支援的壓縮格式: {0}")]
     UnsupportedFormat(String),
 }
 
 impl ArchiveError {
     /// 將 sevenz-rust 的 Error 轉換為強型別之 ArchiveError
-    pub fn from_sevenz(err: sevenz_rust::Error) -> Self {
+    pub fn from_sevenz(err: sevenz_rust::Error, has_password: bool) -> Self {
         match err {
             sevenz_rust::Error::PasswordRequired => ArchiveError::PasswordRequired,
             sevenz_rust::Error::MaybeBadPassword(_) => ArchiveError::InvalidPassword,
-            sevenz_rust::Error::ChecksumVerificationFailed => ArchiveError::InvalidPassword,
-            sevenz_rust::Error::NextHeaderCrcMismatch => ArchiveError::InvalidPassword,
+            sevenz_rust::Error::ChecksumVerificationFailed => {
+                if has_password {
+                    ArchiveError::InvalidPassword
+                } else {
+                    ArchiveError::SevenZ(
+                        "資料校驗碼不符合 (CRC/Checksum verification failed)".to_string(),
+                    )
+                }
+            }
+            sevenz_rust::Error::NextHeaderCrcMismatch => {
+                if has_password {
+                    ArchiveError::InvalidPassword
+                } else {
+                    ArchiveError::SevenZ("標頭校驗碼不符合 (Header CRC mismatch)".to_string())
+                }
+            }
             sevenz_rust::Error::Io(e, _) => {
                 let msg = e.to_string().to_lowercase();
                 if msg.contains("password") {

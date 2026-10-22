@@ -4,7 +4,8 @@ pub mod archive;
 pub mod error;
 
 pub use archive::{
-    is_image_extension, sanitize_archive_path, ManagedArchiveSession,
-    SUPPORTED_IMAGE_EXTENSIONS,
+    ArchiveLimits, ArchiveProgress, ManagedArchiveSession, ProgressCallback,
+    SUPPORTED_IMAGE_EXTENSIONS, extract_7z_pure_rust, find_native_7z, is_image_extension,
+    natural_cmp, sanitize_archive_path,
 };
 pub use error::ArchiveError;
