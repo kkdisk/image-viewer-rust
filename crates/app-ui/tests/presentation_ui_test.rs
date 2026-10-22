@@ -30,6 +30,14 @@ fn preview_status_preserves_the_committed_save_state() {
         .as_mut()
         .unwrap()
         .update_preview(app.slider_params);
+    assert_eq!(
+        app.document_status(),
+        DocumentStatus::Preview {
+            committed_dirty: false,
+            computing: false
+        }
+    );
+    assert!(app.has_unsaved_changes());
     assert!(app.apply_current_adjustments());
     assert_eq!(app.document_status(), DocumentStatus::Unsaved);
     app.slider_params.brightness = 1.2;
@@ -112,6 +120,7 @@ fn status_bar_buttons_work_with_pointer_events_and_are_disabled_without_an_image
     ] {
         let ctx = egui::Context::default();
         let state = StatusBarState {
+            animated: false,
             filename: Some("非常長的圖片名稱.png"),
             dimensions: Some((4000, 3000)),
             zoom: 0.25,
@@ -329,6 +338,7 @@ fn status_rendering_preserves_auto_fit_zoom_and_keeps_dimensions_visible_with_lo
     let filename = format!("{}.png", "很長的圖片名稱".repeat(30));
     let message = "載入訊息".repeat(80);
     let state = StatusBarState {
+        animated: false,
         filename: Some(&filename),
         dimensions: Some((6400, 4800)),
         zoom: 80.0,

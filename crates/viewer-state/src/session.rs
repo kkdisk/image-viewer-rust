@@ -158,7 +158,12 @@ impl EditingSession {
 
     /// 是否有未存檔的變更
     pub fn is_dirty(&self) -> bool {
-        self.history.is_dirty() || self.has_active_preview()
+        self.is_committed_dirty() || self.has_active_preview()
+    }
+
+    /// 僅判斷已套用底圖是否尚未儲存，不包含未套用預覽。
+    pub fn is_committed_dirty(&self) -> bool {
+        self.history.is_dirty()
     }
 
     /// 標記目前狀態已存檔

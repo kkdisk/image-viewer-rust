@@ -14,6 +14,40 @@ fn create_solid_image(width: u32, height: u32, color: Rgba<u8>) -> RgbaImage {
 }
 
 #[test]
+fn committed_save_state_is_independent_of_preview_and_tracks_history() {
+    let mut session = EditingSession::new(
+        RgbaImage::from_pixel(2, 2, Rgba([100, 100, 100, 255])),
+        None,
+    );
+    let params = AdjustmentParams {
+        brightness: 1.2,
+        ..Default::default()
+    };
+    session.update_preview(params);
+    assert!(session.is_dirty());
+    assert!(!session.is_committed_dirty());
+    session.cancel_adjustments();
+    assert!(!session.is_dirty());
+    session.update_preview(params);
+    assert!(session.apply_adjustments());
+    assert!(session.is_committed_dirty());
+    session.mark_saved();
+    assert!(!session.is_committed_dirty());
+    session.update_preview(params);
+    assert!(session.is_dirty());
+    assert!(!session.is_committed_dirty());
+    assert!(session.apply_adjustments());
+    assert!(session.is_committed_dirty());
+    assert!(session.undo());
+    assert!(!session.is_committed_dirty());
+    assert!(session.redo());
+    assert!(session.is_committed_dirty());
+    session.update_preview(params);
+    session.cancel_adjustments();
+    assert!(session.is_committed_dirty());
+}
+
+#[test]
 fn test_history_manager_undo_redo_and_limit() {
     let img0 = Arc::new(create_solid_image(10, 10, Rgba([0, 0, 0, 255])));
     let mut history = HistoryManager::new(img0, "初始圖").with_max_steps(3);

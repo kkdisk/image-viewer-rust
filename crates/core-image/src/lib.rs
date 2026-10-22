@@ -2,6 +2,7 @@
 //!
 //! 提供影像編解碼、EXIF Orientation 解析與方向校正、像素管線微調，以及安全保護與原子儲存。
 
+pub mod display_preview;
 pub mod error;
 pub mod exif;
 pub mod io;

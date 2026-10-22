@@ -38,6 +38,7 @@ pub enum ZoomAction {
 }
 
 pub struct StatusBarState<'a> {
+    pub animated: bool,
     pub filename: Option<&'a str>,
     pub dimensions: Option<(u32, u32)>,
     pub zoom: f32,
@@ -61,6 +62,9 @@ impl StatusBar {
                 ui.horizontal(|ui| {
                     let (label, color) = state.document.label();
                     ui.label(RichText::new(label).strong().color(color));
+                    if state.animated {
+                        ui.label("動畫檔（僅顯示第一格）");
+                    }
                     ui.separator();
                     let size_text = state
                         .dimensions
@@ -172,7 +176,7 @@ impl ImageViewerApp {
             || !self.slider_params.is_identity()
         {
             DocumentStatus::Preview {
-                committed_dirty: session.is_dirty(),
+                committed_dirty: session.is_committed_dirty(),
                 computing: self.is_preview_pending(),
             }
         } else if session.is_dirty() {

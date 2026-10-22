@@ -10,6 +10,33 @@ use tempfile::Builder;
 use crate::error::ImageError;
 use crate::exif::{apply_orientation, read_orientation};
 
+/// 安全檢查尺寸後，最多讀取兩格以辨識 GIF／WebP 動畫；不遍歷完整動畫。
+pub fn inspect_animation<P: AsRef<Path>>(path: P) -> Result<bool, ImageError> {
+    use image::AnimationDecoder;
+    let reader = ImageReader::open(path.as_ref())?.with_guessed_format()?;
+    let format = reader.format();
+    let (width, height) = reader.into_dimensions()?;
+    check_pixel_limit(width, height, MAX_SAFE_PIXELS)?;
+    let file = BufReader::new(File::open(path)?);
+    let mut frames = match format {
+        Some(ImageFormat::Gif) => image::codecs::gif::GifDecoder::new(file)?.into_frames(),
+        Some(ImageFormat::WebP) => image::codecs::webp::WebPDecoder::new(file)?.into_frames(),
+        _ => return Ok(false),
+    };
+    if let Some(frame) = frames.next() {
+        frame?;
+    } else {
+        return Ok(false);
+    }
+    match frames.next() {
+        Some(frame) => {
+            frame?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 /// 預設最大安全像素上限：64M 像素 (64 * 1024 * 1024 = 67,108,864 像素)
 pub const MAX_SAFE_PIXELS: u64 = 64 * 1024 * 1024;
 

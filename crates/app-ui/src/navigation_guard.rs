@@ -42,6 +42,10 @@ impl ImageViewerApp {
                     });
                 }
             });
+        if self.animation_save.is_some() {
+            self.show_animation_save_dialog(ctx);
+            return;
+        }
         self.show_leave_dialog(ctx);
         if self.is_saving() {
             egui::Window::new("正在儲存圖片")
@@ -279,6 +283,36 @@ mod tests {
                 modifiers: Default::default(),
             }],
         )
+    }
+
+    #[test]
+    fn animation_dialog_cancel_and_confirm_buttons_gate_writes() {
+        let ctx = egui::Context::default();
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("static.png");
+        let mut app = ImageViewerApp::default();
+        app.session = Some(viewer_state::EditingSession::new(
+            image::RgbaImage::new(4, 4),
+            None,
+        ));
+        app.animated_source = true;
+        assert!(app.save_image_to(&target));
+        frame(&mut app, &ctx, Vec::new());
+        let output = frame(&mut app, &ctx, Vec::new());
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|shape| text_position(&shape.shape, "動畫檔儲存警告").is_some())
+        );
+        click(&mut app, &ctx, "取消");
+        assert!(!app.has_animation_save_confirmation());
+        assert!(!target.exists());
+        assert!(app.save_image_to(&target));
+        click(&mut app, &ctx, "確認儲存靜態圖");
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        assert!(target.exists());
+        assert!(!app.is_animated_source());
     }
 
     #[test]

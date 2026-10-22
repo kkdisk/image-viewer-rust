@@ -1,7 +1,7 @@
 //! eframe::App 主桌面應用邏輯
 
 use core_image::AdjustmentParams;
-use egui::{CentralPanel, ColorImage, Key, TextureHandle, TextureOptions};
+use egui::{CentralPanel, Key, TextureHandle};
 use std::path::PathBuf;
 use std::sync::Arc;
 use viewer_state::{EditingSession, ViewportState};
@@ -20,6 +20,8 @@ use crate::thumbnail_loader::ThumbnailManager;
 
 /// 主圖片瀏覽與編輯桌面應用狀態
 pub struct ImageViewerApp {
+    pub(crate) animated_source: bool,
+    pub(crate) animation_save: Option<crate::animation_save::AnimationSave>,
     pub(crate) leave_guard: crate::navigation_guard::LeaveGuard,
     pub(crate) document_io: crate::document_io::DocumentIo,
     pub(crate) preferences: crate::preferences::PreferenceState,
@@ -39,8 +41,8 @@ pub struct ImageViewerApp {
     pub duplicate_finder_state: DuplicateFinderState,
     /// GPU 影像紋理快取
     pub texture: Option<TextureHandle>,
-    /// 目前上傳到 GPU 紋理的底層影像指標，用於避免重複上傳
-    last_texture_ptr: usize,
+    /// 主圖背景顯示預覽，持有來源快照並核對裝置上限。
+    active_display: crate::display_texture::DisplayTexture,
     /// 目錄圖片清單與巡迴導覽管理器
     pub playlist: ImagePlaylist,
     /// 非同步縮圖生成與快取管理器
@@ -56,8 +58,9 @@ pub struct ImageViewerApp {
     pub left_viewport: ViewportState,
     /// 原始底圖 GPU 紋理（用於原圖比對）
     pub original_texture: Option<TextureHandle>,
-    /// 原始底圖底層指標
-    last_original_ptr: usize,
+    /// 原圖與參考圖各自隔離的背景顯示工作。
+    original_display: crate::display_texture::DisplayTexture,
+    reference_display: crate::display_texture::DisplayTexture,
     /// 外部參考圖 RGBA 快照
     pub reference_image: Option<Arc<image::RgbaImage>>,
     /// 外部參考圖 GPU 紋理
@@ -99,6 +102,8 @@ pub struct ImageViewerApp {
 impl Default for ImageViewerApp {
     fn default() -> Self {
         Self {
+            animated_source: false,
+            animation_save: None,
             leave_guard: crate::navigation_guard::LeaveGuard::default(),
             document_io: crate::document_io::DocumentIo::default(),
             preferences: crate::preferences::PreferenceState::default(),
@@ -111,7 +116,7 @@ impl Default for ImageViewerApp {
             show_about_dialog: false,
             duplicate_finder_state: DuplicateFinderState::default(),
             texture: None,
-            last_texture_ptr: 0,
+            active_display: Default::default(),
             playlist: ImagePlaylist::new(),
             thumbnail_manager: ThumbnailManager::new(),
             slider_params: AdjustmentParams::default(),
@@ -120,7 +125,8 @@ impl Default for ImageViewerApp {
             comparison: ComparisonConfig::default(),
             left_viewport: ViewportState::new(),
             original_texture: None,
-            last_original_ptr: 0,
+            original_display: Default::default(),
+            reference_display: Default::default(),
             reference_image: None,
             reference_texture: None,
             archive_session: None,
@@ -342,6 +348,7 @@ impl ImageViewerApp {
             self.comparison.is_active = true;
             return;
         }
+        self.animated_source = loaded.animated;
         if let Some(archive) = loaded.archive {
             self.archive_session = Some(archive);
         } else if !self
@@ -360,7 +367,7 @@ impl ImageViewerApp {
         self.viewport.reset_fit_window();
         self.left_viewport = self.viewport;
         self.original_texture = None;
-        self.last_original_ptr = 0;
+        self.original_display.clear();
         self.reference_texture = None;
         self.reference_image = None;
         self.comparison.reference_path = None;
@@ -464,64 +471,41 @@ impl ImageViewerApp {
 
     /// 更新 GPU 影像紋理（主視口與雙圖左側視口）
     fn sync_texture(&mut self, ctx: &egui::Context) {
-        if let Some(sess) = &self.session {
-            let active = sess.active_image();
-            let current_ptr = Arc::as_ptr(&active) as usize;
-
-            if self.texture.is_none() || self.last_texture_ptr != current_ptr {
-                let size = [active.width() as usize, active.height() as usize];
-                let color_image = ColorImage::from_rgba_unmultiplied(size, active.as_raw());
-
-                // 採用雙線性過濾 LINEAR，確保縮放時平滑流暢
-                let handle =
-                    ctx.load_texture("active_viewport_image", color_image, TextureOptions::LINEAR);
-                self.texture = Some(handle);
-                self.last_texture_ptr = current_ptr;
-            }
-
-            // 若雙圖分割對比啟用中，更新左側紋理
+        if let Some(session) = &self.session {
+            self.active_display.sync(
+                ctx,
+                session.active_image(),
+                &mut self.texture,
+                "active_viewport_image",
+            );
             if self.comparison.is_active {
                 match self.comparison.source {
-                    ComparisonSource::Original => {
-                        let orig = sess.original_image();
-                        let orig_ptr = Arc::as_ptr(&orig) as usize;
-                        if self.original_texture.is_none() || self.last_original_ptr != orig_ptr {
-                            let size = [orig.width() as usize, orig.height() as usize];
-                            let color_image =
-                                ColorImage::from_rgba_unmultiplied(size, orig.as_raw());
-                            let handle = ctx.load_texture(
-                                "original_viewport_image",
-                                color_image,
-                                TextureOptions::LINEAR,
-                            );
-                            self.original_texture = Some(handle);
-                            self.last_original_ptr = orig_ptr;
-                        }
-                    }
+                    ComparisonSource::Original => self.original_display.sync(
+                        ctx,
+                        session.original_image(),
+                        &mut self.original_texture,
+                        "original_viewport_image",
+                    ),
                     ComparisonSource::Reference => {
-                        if let Some(ref_img) = &self.reference_image {
-                            if self.reference_texture.is_none() {
-                                let size = [ref_img.width() as usize, ref_img.height() as usize];
-                                let color_image =
-                                    ColorImage::from_rgba_unmultiplied(size, ref_img.as_raw());
-                                let handle = ctx.load_texture(
-                                    "reference_viewport_image",
-                                    color_image,
-                                    TextureOptions::LINEAR,
-                                );
-                                self.reference_texture = Some(handle);
-                            }
+                        if let Some(image) = &self.reference_image {
+                            self.reference_display.sync(
+                                ctx,
+                                Arc::clone(image),
+                                &mut self.reference_texture,
+                                "reference_viewport_image",
+                            );
                         } else {
                             self.reference_texture = None;
+                            self.reference_display.clear();
                         }
                     }
                 }
             }
         } else {
             self.texture = None;
-            self.last_texture_ptr = 0;
             self.original_texture = None;
-            self.last_original_ptr = 0;
+            self.active_display.clear();
+            self.original_display.clear();
         }
     }
 
@@ -631,6 +615,18 @@ impl ImageViewerApp {
                 std::time::Instant::now(),
             ));
             return false;
+        }
+        if self.is_saving() || self.is_loading_image() {
+            return false;
+        }
+        if self.animated_source
+            && let Some(session) = &self.session
+        {
+            self.animation_save = Some(crate::animation_save::AnimationSave {
+                path: target_path.to_path_buf(),
+                source: session.committed_image(),
+            });
+            return true;
         }
         self.enqueue_save(target_path.to_path_buf())
     }
@@ -997,6 +993,7 @@ impl eframe::App for ImageViewerApp {
         let zoom_action = StatusBar::show(
             ctx,
             &crate::panels::StatusBarState {
+                animated: self.animated_source,
                 filename,
                 dimensions,
                 zoom: self.viewport.zoom,
@@ -1293,6 +1290,58 @@ impl eframe::App for ImageViewerApp {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn all_display_sources_fit_gpu_limit_and_save_full_resolution() {
+        use std::time::{Duration, Instant};
+        let mut app = ImageViewerApp {
+            session: Some(EditingSession::new(image::RgbaImage::new(2000, 4), None)),
+            reference_image: Some(Arc::new(image::RgbaImage::new(4, 2000))),
+            ..Default::default()
+        };
+        app.comparison.is_active = true;
+        let ctx = egui::Context::default();
+        for source in [ComparisonSource::Original, ComparisonSource::Reference] {
+            app.comparison.source = source;
+            let start = Instant::now();
+            loop {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        max_texture_side: Some(1024),
+                        ..Default::default()
+                    },
+                    |ctx| app.sync_texture(ctx),
+                );
+                let left = match source {
+                    ComparisonSource::Original => app.original_texture.as_ref(),
+                    ComparisonSource::Reference => app.reference_texture.as_ref(),
+                };
+                if let (Some(main), Some(left)) = (&app.texture, left) {
+                    assert_eq!(main.size(), [1024, 2]);
+                    assert_eq!(
+                        left.size(),
+                        if source == ComparisonSource::Original {
+                            [1024, 2]
+                        } else {
+                            [2, 1024]
+                        }
+                    );
+                    break;
+                }
+                assert!(start.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.png");
+        assert!(app.save_image_to(&path));
+        assert!(app.wait_document_io(Duration::from_secs(5)));
+        assert_eq!(image::image_dimensions(path).unwrap(), (2000, 4));
+        assert_eq!(
+            app.session.as_ref().unwrap().original_image().dimensions(),
+            (2000, 4)
+        );
+    }
 
     #[test]
     fn queued_preview_is_reported_as_computing_without_marking_the_base_dirty() {

@@ -19,6 +19,7 @@ pub(crate) struct LoadedImage {
     pub playlist: ImagePlaylist,
     pub archive: Option<ManagedArchiveSession>,
     pub reference: bool,
+    pub animated: bool,
 }
 
 struct ReadTask {
@@ -86,8 +87,11 @@ impl Default for DocumentIo {
                         if version.load(Ordering::SeqCst) != task.id {
                             continue;
                         }
-                        let result = core_image::load_image(&task.path)
-                            .map(|image| {
+                        let result = core_image::io::inspect_animation(&task.path)
+                            .and_then(|animated| {
+                                core_image::load_image(&task.path).map(|image| (image, animated))
+                            })
+                            .map(|(image, animated)| {
                                 // 解碼無法中途停止；過期後不再掃描目錄或交付大型影像。
                                 if version.load(Ordering::SeqCst) != task.id {
                                     return None;
@@ -102,6 +106,7 @@ impl Default for DocumentIo {
                                     playlist: task.playlist,
                                     archive: task.archive,
                                     reference: task.reference,
+                                    animated,
                                 })
                             })
                             .map_err(|error| error.to_string());
@@ -182,7 +187,7 @@ impl DocumentIo {
 
 impl ImageViewerApp {
     pub fn is_saving(&self) -> bool {
-        self.document_io.pending_save.is_some()
+        self.document_io.pending_save.is_some() || self.animation_save.is_some()
     }
     pub fn is_loading_image(&self) -> bool {
         self.document_io.pending_main.is_some()
@@ -327,6 +332,7 @@ impl ImageViewerApp {
                             {
                                 session.set_source_path(path);
                                 session.mark_saved();
+                                self.animated_source = false;
                                 self.playlist = playlist;
                             }
                             if !matches_current {

@@ -3,6 +3,67 @@ use image::{ImageBuffer, Rgba};
 use std::fs;
 
 #[test]
+fn scan_delivers_metadata_failures_and_isolates_replaced_scan() {
+    use app_ui::panels::{DuplicateMode, duplicate_dialog::ScanStatus};
+    use std::time::{Duration, Instant};
+    let dir = tempfile::tempdir().unwrap();
+    let good = dir.path().join("good.png");
+    ImageBuffer::from_pixel(8, 8, Rgba([100u8, 50, 50, 255]))
+        .save(&good)
+        .unwrap();
+    fs::copy(&good, dir.path().join("copy.png")).unwrap();
+    fs::write(dir.path().join("bad.png"), b"invalid").unwrap();
+    let mut state = DuplicateFinderState::default();
+    state.target_dir = Some(dir.path().to_path_buf());
+    state.mode = DuplicateMode::SimilarPhash;
+    state.start_scan();
+    let start = Instant::now();
+    loop {
+        state.update_progress();
+        if matches!(state.status, ScanStatus::Completed { .. }) {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(matches!(
+        state.status,
+        ScanStatus::Completed {
+            total_scanned: 3,
+            succeeded: 2,
+            failed: 1
+        }
+    ));
+    assert_eq!(state.groups.len(), 1);
+    assert!(
+        state.groups[0]
+            .items
+            .iter()
+            .all(|item| item.dimensions == Some((8, 8)) && item.size_bytes > 0)
+    );
+    state.start_scan();
+    let empty = tempfile::tempdir().unwrap();
+    state.target_dir = Some(empty.path().to_path_buf());
+    state.start_scan();
+    let start = Instant::now();
+    loop {
+        state.update_progress();
+        if matches!(
+            state.status,
+            ScanStatus::Completed {
+                total_scanned: 0,
+                ..
+            }
+        ) {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(state.groups.is_empty());
+}
+
+#[test]
 fn smart_selection_keeps_unknown_sizes_and_a_valid_representative() {
     let mut state = DuplicateFinderState::default();
     let item = |dimensions, size_bytes| DuplicateItemUi {

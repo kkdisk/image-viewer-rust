@@ -36,8 +36,10 @@ pub enum ScanMessage {
         stage: String,
     },
     Finished {
-        groups: Vec<DuplicateGroup>,
+        groups: Vec<DuplicateGroupUi>,
         total_scanned: usize,
+        succeeded: usize,
+        failed: usize,
     },
     Failed(String),
 }
@@ -52,6 +54,8 @@ pub enum ScanStatus {
     },
     Completed {
         total_scanned: usize,
+        succeeded: usize,
+        failed: usize,
     },
     Error(String),
 }
@@ -93,6 +97,8 @@ pub struct DuplicateFinderState {
     rx_scan: Option<Receiver<ScanMessage>>,
     // 預覽縮圖快取
     preview_textures: HashMap<PathBuf, egui::TextureHandle>,
+    preview_errors: HashMap<PathBuf, String>,
+    preview_loader: crate::duplicate_preview_loader::DuplicatePreviewLoader,
 }
 
 impl Default for DuplicateFinderState {
@@ -111,6 +117,8 @@ impl Default for DuplicateFinderState {
             delete_status_msg: None,
             rx_scan: None,
             preview_textures: HashMap::new(),
+            preview_errors: HashMap::new(),
+            preview_loader: Default::default(),
         }
     }
 }
@@ -138,6 +146,7 @@ impl DuplicateFinderState {
 
         let (tx, rx) = channel();
         self.rx_scan = Some(rx);
+        self.reset_previews();
         self.groups.clear();
         self.active_group_idx = None;
         self.active_item_idx = None;
@@ -162,6 +171,8 @@ impl DuplicateFinderState {
                 let _ = tx.send(ScanMessage::Finished {
                     groups: Vec::new(),
                     total_scanned: 0,
+                    succeeded: 0,
+                    failed: 0,
                 });
                 return;
             }
@@ -174,6 +185,7 @@ impl DuplicateFinderState {
 
             // 2. 平行計算雜湊
             let completed_counter = Arc::new(AtomicUsize::new(0));
+            let succeeded = AtomicUsize::new(0);
 
             let groups = match mode {
                 DuplicateMode::ExactMd5 => {
@@ -184,7 +196,7 @@ impl DuplicateFinderState {
                     let md5_list: Vec<(PathBuf, String)> = files_ref
                         .par_iter()
                         .filter_map(|p| {
-                            let hash = compute_md5(p).ok()?;
+                            let hash = compute_md5(p);
                             let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
                             if done.is_multiple_of(10) || done == total_files {
                                 let _ = tx_prog.send(ScanMessage::Progress {
@@ -196,7 +208,10 @@ impl DuplicateFinderState {
                                     ),
                                 });
                             }
-                            Some((p.clone(), hash))
+                            hash.ok().map(|hash| {
+                                succeeded.fetch_add(1, Ordering::Relaxed);
+                                (p.clone(), hash)
+                            })
                         })
                         .collect();
 
@@ -216,7 +231,7 @@ impl DuplicateFinderState {
                     let phash_list: Vec<(PathBuf, Vec<u8>)> = files_ref
                         .par_iter()
                         .filter_map(|p| {
-                            let hash = compute_phash(p, 8).ok()?;
+                            let hash = compute_phash(p, 8);
                             let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
                             if done.is_multiple_of(5) || done == total_files {
                                 let _ = tx_prog.send(ScanMessage::Progress {
@@ -228,7 +243,10 @@ impl DuplicateFinderState {
                                     ),
                                 });
                             }
-                            Some((p.clone(), hash))
+                            hash.ok().map(|hash| {
+                                succeeded.fetch_add(1, Ordering::Relaxed);
+                                (p.clone(), hash)
+                            })
                         })
                         .collect();
 
@@ -243,8 +261,10 @@ impl DuplicateFinderState {
             };
 
             let _ = tx.send(ScanMessage::Finished {
-                groups,
+                groups: prepare_group_metadata(groups),
                 total_scanned: total_files,
+                succeeded: succeeded.load(Ordering::Relaxed),
+                failed: total_files.saturating_sub(succeeded.load(Ordering::Relaxed)),
             });
         });
     }
@@ -279,38 +299,16 @@ impl DuplicateFinderState {
                 ScanMessage::Finished {
                     groups,
                     total_scanned,
+                    succeeded,
+                    failed,
                 } => {
-                    // 轉為 UI 結構並擷取元數據（檔案大小）
-                    self.groups = groups
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, g)| {
-                            let items = g
-                                .items
-                                .into_iter()
-                                .map(|p| {
-                                    let size_bytes =
-                                        std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-                                    let dims = image::image_dimensions(&p).ok();
-                                    DuplicateItemUi {
-                                        path: p,
-                                        size_bytes,
-                                        dimensions: dims,
-                                        selected_for_delete: false,
-                                    }
-                                })
-                                .collect();
-
-                            DuplicateGroupUi {
-                                id: idx + 1,
-                                max_distance: g.max_distance,
-                                is_expanded: true,
-                                items,
-                            }
-                        })
-                        .collect();
-
-                    self.status = ScanStatus::Completed { total_scanned };
+                    // 背景已完成元資料，介面只接收目前掃描的專屬通道。
+                    self.groups = groups;
+                    self.status = ScanStatus::Completed {
+                        total_scanned,
+                        succeeded,
+                        failed,
+                    };
                     if !self.groups.is_empty() {
                         self.active_group_idx = Some(0);
                         if self.groups[0].items.len() > 1 {
@@ -457,28 +455,84 @@ impl DuplicateFinderState {
         ctx: &egui::Context,
         path: &Path,
     ) -> Option<egui::TextureHandle> {
+        while let Some(result) = self.preview_loader.poll() {
+            match result.pixels {
+                Ok(rgba) => {
+                    if self.preview_textures.len() >= 8 {
+                        self.preview_textures.clear();
+                    }
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    let texture = ctx.load_texture(
+                        "duplicate_preview",
+                        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.preview_textures.insert(result.path, texture);
+                }
+                Err(error) => {
+                    if self.preview_errors.len() >= 8 {
+                        self.preview_errors.clear();
+                    }
+                    self.preview_errors.insert(result.path, error);
+                }
+            }
+        }
         if let Some(tex) = self.preview_textures.get(path) {
             return Some(tex.clone());
         }
-
-        if let Ok(img) = image::open(path) {
-            let thumb = img.thumbnail(256, 256);
-            let rgba = thumb.to_rgba8();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            let pixels = rgba.into_raw();
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-            let tex = ctx.load_texture(
-                path.to_string_lossy().to_string(),
-                color_image,
-                egui::TextureOptions::LINEAR,
-            );
-            self.preview_textures
-                .insert(path.to_path_buf(), tex.clone());
-            Some(tex)
-        } else {
-            None
+        if !self.preview_errors.contains_key(path) {
+            self.preview_loader.request(path.to_path_buf());
         }
+        if self.preview_loader.is_pending() || !self.preview_errors.contains_key(path) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        None
     }
+
+    fn reset_previews(&mut self) {
+        self.preview_loader.reset();
+        self.preview_textures.clear();
+        self.preview_errors.clear();
+    }
+}
+
+/// 在掃描背景工作內完成元資料交付，介面接收結果不再逐檔讀取。
+fn prepare_group_metadata(groups: Vec<DuplicateGroup>) -> Vec<DuplicateGroupUi> {
+    groups
+        .into_iter()
+        .enumerate()
+        .map(|(index, group)| DuplicateGroupUi {
+            id: index + 1,
+            max_distance: group.max_distance,
+            is_expanded: true,
+            items: group
+                .items
+                .into_iter()
+                .map(|path| {
+                    let size_bytes = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
+                    let dimensions =
+                        core_image::inspect_dimensions(&path)
+                            .ok()
+                            .filter(|&(w, h)| {
+                                w > 0
+                                    && h > 0
+                                    && core_image::check_pixel_limit(
+                                        w,
+                                        h,
+                                        core_image::MAX_SAFE_PIXELS,
+                                    )
+                                    .is_ok()
+                            });
+                    DuplicateItemUi {
+                        path,
+                        size_bytes,
+                        dimensions,
+                        selected_for_delete: false,
+                    }
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// 遞迴或非遞迴掃描圖片檔案
@@ -705,6 +759,17 @@ impl DuplicateFinderDialog {
                 ui.add_space(6.0);
                 ui.separator();
                 ui.add_space(6.0);
+
+                if let ScanStatus::Completed {
+                    total_scanned,
+                    succeeded,
+                    failed,
+                } = state.status
+                {
+                    ui.label(format!(
+                        "掃描 {total_scanned} 個檔案：成功 {succeeded}，略過／失敗 {failed}"
+                    ));
+                }
 
                 // 4. 重複結果操作便捷列 (當有結果時顯示)
                 if !state.groups.is_empty() {
@@ -1068,6 +1133,9 @@ impl DuplicateFinderDialog {
                 });
             });
 
+        if !is_open {
+            state.reset_previews();
+        }
         state.is_open = is_open;
 
         // 二次確認安全刪除對話框
@@ -1190,7 +1258,11 @@ fn render_preview_card(
         ui.painter().text(
             rect.center(),
             Align2::CENTER_CENTER,
-            "🖼 無法預覽",
+            if state.preview_errors.contains_key(&item.path) {
+                "無法預覽（解碼失敗或超過限制）"
+            } else {
+                "正在載入預覽…"
+            },
             egui::FontId::proportional(14.0),
             ThemeColors::TEXT_MUTED,
         );
