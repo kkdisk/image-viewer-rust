@@ -15,6 +15,11 @@ pub use histogram_view::{HistogramMode, HistogramWidget};
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
+    OpenFolder,
+    OpenRecent(usize),
+    Sort(crate::playlist::SortOptions),
+    Fullscreen,
+    Shortcuts,
     Exit,
     Open,
     Save,
@@ -29,6 +34,8 @@ pub enum MenuAction {
 
 /// 選單狀態與切換開關
 pub struct MenuBarState<'a> {
+    pub recent: &'a [crate::recent::RecentEntry],
+    pub sort: crate::playlist::SortOptions,
     pub can_undo: bool,
     pub can_redo: bool,
     pub show_side_panel: &'a mut bool,
@@ -72,6 +79,30 @@ impl MenuBar {
                             triggered_action = Some(MenuAction::Open);
                             ui.close_menu();
                         }
+                        if ui.button("開啟資料夾…").clicked() {
+                            triggered_action = Some(MenuAction::OpenFolder);
+                            ui.close_menu();
+                        }
+                        ui.menu_button("最近開啟", |ui| {
+                            if state.recent.is_empty() {
+                                ui.label("尚無最近項目");
+                            }
+                            for (index, entry) in state.recent.iter().enumerate() {
+                                let label = entry
+                                    .path
+                                    .file_name()
+                                    .unwrap_or(entry.path.as_os_str())
+                                    .to_string_lossy();
+                                if ui
+                                    .button(label)
+                                    .on_hover_text(entry.path.display().to_string())
+                                    .clicked()
+                                {
+                                    triggered_action = Some(MenuAction::OpenRecent(index));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                         if ui.button("💾 儲存變更 (Save)          Ctrl+S").clicked() {
                             triggered_action = Some(MenuAction::Save);
                             ui.close_menu();
@@ -111,6 +142,37 @@ impl MenuBar {
                     });
 
                     ui.menu_button("檢視 (View)", |ui| {
+                        if ui.button("全螢幕（F11）").clicked() {
+                            triggered_action = Some(MenuAction::Fullscreen);
+                            ui.close_menu();
+                        }
+                        ui.menu_button("排序", |ui| {
+                            for (mode, label) in [
+                                (crate::playlist::SortMode::Natural, "自然檔名"),
+                                (crate::playlist::SortMode::Modified, "修改日期"),
+                                (crate::playlist::SortMode::Size, "檔案大小"),
+                            ] {
+                                if ui
+                                    .selectable_label(state.sort.mode == mode, label)
+                                    .clicked()
+                                {
+                                    triggered_action =
+                                        Some(MenuAction::Sort(crate::playlist::SortOptions {
+                                            mode,
+                                            ..state.sort
+                                        }));
+                                    ui.close_menu();
+                                }
+                            }
+                            let mut descending = state.sort.descending;
+                            if ui.checkbox(&mut descending, "降冪").changed() {
+                                triggered_action =
+                                    Some(MenuAction::Sort(crate::playlist::SortOptions {
+                                        descending,
+                                        ..state.sort
+                                    }));
+                            }
+                        });
                         ui.checkbox(state.show_side_panel, "側邊微調面板");
                         ui.checkbox(state.show_filmstrip, "底部縮圖列表 (Filmstrip)");
                         ui.checkbox(state.magnifier_enabled, "🔎 局部放大鏡 (Magnifier)      M");
@@ -144,6 +206,10 @@ impl MenuBar {
                     });
 
                     ui.menu_button("說明 (Help)", |ui| {
+                        if ui.button("快捷鍵說明（F1）").clicked() {
+                            triggered_action = Some(MenuAction::Shortcuts);
+                            ui.close_menu();
+                        }
                         if ui.button("ℹ 關於 Rust Image Viewer").clicked() {
                             triggered_action = Some(MenuAction::About);
                             ui.close_menu();

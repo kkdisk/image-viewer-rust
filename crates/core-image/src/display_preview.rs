@@ -1,11 +1,14 @@
 //! 顯示用等比下採樣，不改變編輯底圖或輸出像素。
 
-use image::RgbaImage;
+use image::{GenericImageView, Rgba, RgbaImage};
 
-pub fn display_preview(image: &RgbaImage, max_side: u32) -> RgbaImage {
+pub fn display_preview<I: GenericImageView<Pixel = Rgba<u8>>>(
+    image: &I,
+    max_side: u32,
+) -> RgbaImage {
     let max_side = max_side.max(1);
     if image.width() <= max_side && image.height() <= max_side {
-        return image.clone();
+        return RgbaImage::from_fn(image.width(), image.height(), |x, y| image.get_pixel(x, y));
     }
     let longest = u64::from(image.width().max(image.height()));
     let width = (u64::from(image.width()) * u64::from(max_side) / longest).max(1) as u32;
@@ -16,6 +19,16 @@ pub fn display_preview(image: &RgbaImage, max_side: u32) -> RgbaImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cropped_view_preserves_source_coordinates_without_copying_source() {
+        let source = RgbaImage::from_fn(100, 100, |x, y| Rgba([x as u8, y as u8, 0, 255]));
+        let view = image::imageops::crop_imm(&source, 10, 20, 30, 40);
+        let preview = display_preview(&*view, 128);
+        assert_eq!(preview.dimensions(), (30, 40));
+        assert_eq!(preview.get_pixel(0, 0), source.get_pixel(10, 20));
+        assert_eq!(source.dimensions(), (100, 100));
+    }
 
     #[test]
     fn long_edges_fit_without_modifying_source() {

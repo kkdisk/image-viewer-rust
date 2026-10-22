@@ -1,0 +1,97 @@
+﻿{
+    "measured_at":  "2026-10-22T21:34:25.7167658+08:00",
+    "rustc":  "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cpu":  [
+                "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz"
+            ],
+    "ram_bytes":  34152423424,
+    "gpu":  [
+                {
+                    "Name":  "Intel(R) UHD Graphics 630",
+                    "DriverVersion":  "31.0.101.2140"
+                },
+                {
+                    "Name":  "NVIDIA GeForce RTX 2060",
+                    "DriverVersion":  "32.0.16.1742"
+                }
+            ],
+    "test_process_peak_working_set_bytes":  298647552,
+    "test_process_cpu_seconds":  0.546875,
+    "method":  "同次測試、固定 PNG 測資；全圖 GPU 上限策略與視口分級對照。解碼為暖檔案快取；首次紋理為 egui CPU 交付，未量測真實 GPU 呈現。工作集含測資建立與所有案例。",
+    "native_cold_start_ms":  null,
+    "native_gpu_frame_ms":  null,
+    "samples":  [
+                    {
+                        "cpu_frame_p95_ms":  0.3762,
+                        "decode_ms":  4.7702,
+                        "dimensions":  [
+                                           1920,
+                                           1080
+                                       ],
+                        "first_texture_ms":  12.679599999999999,
+                        "source_rgba_bytes":  8294400,
+                        "texture_rgba_estimate_bytes":  8294400,
+                        "tiered":  false
+                    },
+                    {
+                        "cpu_frame_p95_ms":  0.4601,
+                        "decode_ms":  4.7702,
+                        "dimensions":  [
+                                           1920,
+                                           1080
+                                       ],
+                        "first_texture_ms":  12.0911,
+                        "source_rgba_bytes":  8294400,
+                        "texture_rgba_estimate_bytes":  8294400,
+                        "tiered":  true
+                    },
+                    {
+                        "cpu_frame_p95_ms":  0.0188,
+                        "decode_ms":  46.3451,
+                        "dimensions":  [
+                                           6000,
+                                           4000
+                                       ],
+                        "first_texture_ms":  116.2228,
+                        "source_rgba_bytes":  96000000,
+                        "texture_rgba_estimate_bytes":  96000000,
+                        "tiered":  false
+                    },
+                    {
+                        "cpu_frame_p95_ms":  0.0402,
+                        "decode_ms":  46.3451,
+                        "dimensions":  [
+                                           6000,
+                                           4000
+                                       ],
+                        "first_texture_ms":  291.82849999999996,
+                        "source_rgba_bytes":  96000000,
+                        "texture_rgba_estimate_bytes":  11182080,
+                        "tiered":  true
+                    },
+                    {
+                        "cpu_frame_p95_ms":  0.0148,
+                        "decode_ms":  1.1081999999999999,
+                        "dimensions":  [
+                                           30000,
+                                           8
+                                       ],
+                        "first_texture_ms":  5.9437999999999995,
+                        "source_rgba_bytes":  960000,
+                        "texture_rgba_estimate_bytes":  65536,
+                        "tiered":  false
+                    },
+                    {
+                        "cpu_frame_p95_ms":  0.0163,
+                        "decode_ms":  1.1081999999999999,
+                        "dimensions":  [
+                                           30000,
+                                           8
+                                       ],
+                        "first_texture_ms":  4.3294,
+                        "source_rgba_bytes":  960000,
+                        "texture_rgba_estimate_bytes":  8192,
+                        "tiered":  true
+                    }
+                ]
+}

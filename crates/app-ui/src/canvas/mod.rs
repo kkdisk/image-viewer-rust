@@ -50,6 +50,9 @@ pub enum ComparisonAction {
 
 /// 畫布渲染狀態容器
 pub struct CanvasState<'a> {
+    pub hide_controls: bool,
+    pub texture_region: Rect,
+    pub left_region: Rect,
     pub texture: Option<&'a TextureHandle>,
     pub image_dims: Option<(u32, u32)>,
     pub viewport: &'a mut ViewportState,
@@ -80,7 +83,7 @@ impl CanvasView {
                 ui,
                 rect,
                 Id::new("single_canvas_viewport"),
-                state.texture,
+                state.texture.map(|texture| (texture, state.texture_region)),
                 state.image_dims,
                 state.viewport,
                 None,
@@ -115,7 +118,9 @@ impl CanvasView {
                     ui,
                     left_rect,
                     Id::new("left_canvas_viewport"),
-                    state.left_texture,
+                    state
+                        .left_texture
+                        .map(|texture| (texture, state.left_region)),
                     state.left_dims,
                     state.viewport,
                     Some(&left_label),
@@ -126,7 +131,7 @@ impl CanvasView {
                     ui,
                     right_rect,
                     Id::new("right_canvas_viewport"),
-                    state.texture,
+                    state.texture.map(|texture| (texture, state.texture_region)),
                     state.image_dims,
                     state.viewport,
                     Some("✏️ 目前編輯 (Current Edit)"),
@@ -138,7 +143,9 @@ impl CanvasView {
                     ui,
                     left_rect,
                     Id::new("left_canvas_viewport"),
-                    state.left_texture,
+                    state
+                        .left_texture
+                        .map(|texture| (texture, state.left_region)),
                     state.left_dims,
                     state.left_viewport,
                     Some(&left_label),
@@ -148,7 +155,7 @@ impl CanvasView {
                     ui,
                     right_rect,
                     Id::new("right_canvas_viewport"),
-                    state.texture,
+                    state.texture.map(|texture| (texture, state.texture_region)),
                     state.image_dims,
                     state.viewport,
                     Some("✏️ 目前編輯 (Current Edit)"),
@@ -167,7 +174,9 @@ impl CanvasView {
             );
 
             // 繪製頂部浮動對比控制條 (Floating HUD)
-            Self::render_comparison_hud(ui, rect, state.comparison, action);
+            if !state.hide_controls {
+                Self::render_comparison_hud(ui, rect, state.comparison, action);
+            }
 
             right_img_rect
         };
@@ -186,18 +195,20 @@ impl CanvasView {
         ui: &mut Ui,
         rect: Rect,
         id: Id,
-        texture: Option<&TextureHandle>,
+        texture: Option<(&TextureHandle, Rect)>,
         image_dims: Option<(u32, u32)>,
         viewport: &mut ViewportState,
         label: Option<&str>,
     ) -> (Response, Option<Rect>) {
         let response = ui.interact(rect, id, Sense::click_and_drag());
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id.with("bounds"), rect));
         let mut rendered_image_rect = None;
 
         // 設置局部裁切範圍，防止圖片放大平移時超出視口
         let painter = ui.painter().with_clip_rect(rect);
 
-        if let (Some(tex), Some((img_w_u, img_h_u))) = (texture, image_dims) {
+        if let (Some((tex, region)), Some((img_w_u, img_h_u))) = (texture, image_dims) {
             let img_w = img_w_u as f32;
             let img_h = img_h_u as f32;
 
@@ -229,7 +240,10 @@ impl CanvasView {
             // 繪製 GPU 紋理影像
             painter.image(
                 tex.id(),
-                image_rect,
+                Rect::from_min_max(
+                    image_rect.min + region.min.to_vec2() * image_rect.size(),
+                    image_rect.min + region.max.to_vec2() * image_rect.size(),
+                ),
                 Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
@@ -442,5 +456,75 @@ impl CanvasView {
             x += tile_size;
             row_even = !row_even;
         }
+    }
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+    #[test]
+    fn cropped_texture_is_drawn_in_full_image_coordinates() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "crop",
+            egui::ColorImage::new([4, 4], Color32::WHITE),
+            Default::default(),
+        );
+        let region = Rect::from_min_max(pos2(0.25, 0.5), pos2(0.75, 1.0));
+        let mut view = ViewportState::new();
+        view.auto_fit = false;
+        view.zoom = 1.0;
+        let mut full = Rect::NOTHING;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    full = CanvasView::render_viewport(
+                        ui,
+                        ui.available_rect_before_wrap(),
+                        Id::new("crop_test"),
+                        Some((&texture, region)),
+                        Some((100, 200)),
+                        &mut view,
+                        None,
+                    )
+                    .1
+                    .unwrap();
+                });
+            },
+        );
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id() => Some(mesh),
+                _ => None,
+            })
+            .unwrap();
+        let min_x = mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.pos.x)
+            .fold(f32::INFINITY, f32::min);
+        let min_y = mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.pos.y)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.pos.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let max_y = mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.pos.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!(pos2(min_x, min_y), full.min + vec2(25.0, 100.0));
+        assert_eq!(pos2(max_x, max_y), full.min + vec2(75.0, 200.0));
     }
 }

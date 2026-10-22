@@ -124,6 +124,10 @@ impl Default for DuplicateFinderState {
 }
 
 impl DuplicateFinderState {
+    pub fn close(&mut self) {
+        self.is_open = false;
+        self.reset_previews();
+    }
     /// 開啟檢查器並預設當前圖片所在目錄
     pub fn open_with_dir(&mut self, dir: Option<PathBuf>) {
         if self.target_dir.is_none() && dir.is_some() {

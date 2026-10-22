@@ -14,6 +14,7 @@ use std::{
 };
 
 pub(crate) struct LoadedImage {
+    pub opened_path: PathBuf,
     pub path: PathBuf,
     pub pixels: RgbaImage,
     pub playlist: ImagePlaylist,
@@ -23,6 +24,7 @@ pub(crate) struct LoadedImage {
 }
 
 struct ReadTask {
+    sort: crate::playlist::SortOptions,
     id: u64,
     path: PathBuf,
     playlist: ImagePlaylist,
@@ -31,7 +33,7 @@ struct ReadTask {
 }
 
 enum Task {
-    Read(ReadTask),
+    Read(Box<ReadTask>),
     Write {
         id: u64,
         path: PathBuf,
@@ -40,6 +42,10 @@ enum Task {
 }
 
 enum Completion {
+    ArchivePath {
+        id: u64,
+        path: PathBuf,
+    },
     Read {
         id: u64,
         reference: bool,
@@ -82,12 +88,54 @@ impl Default for DocumentIo {
         std::thread::spawn(move || {
             while let Ok(task) = tasks.recv() {
                 let completion = match task {
-                    Task::Read(mut task) => {
+                    Task::Read(task) => {
+                        let mut task = *task;
                         let version = if task.reference { &reference } else { &main };
                         if version.load(Ordering::SeqCst) != task.id {
                             continue;
                         }
-                        let result = core_image::io::inspect_animation(&task.path)
+                        if !task.reference
+                            && task.archive.is_none()
+                            && task.path.extension().is_some_and(|extension| {
+                                extension.eq_ignore_ascii_case("zip")
+                                    || extension.eq_ignore_ascii_case("7z")
+                            })
+                            && !task.path.is_dir()
+                        {
+                            if results
+                                .send(Completion::ArchivePath {
+                                    id: task.id,
+                                    path: task.path,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                            continue;
+                        }
+                        let opened_path = task.archive.as_ref().map_or_else(
+                            || task.path.clone(),
+                            |archive| archive.archive_path.clone(),
+                        );
+                        let preparation: Result<(), core_image::ImageError> =
+                            (|| {
+                                task.playlist.set_sort(task.sort);
+                                if task.path.is_dir() {
+                                    task.playlist.scan_directory(&task.path)?;
+                                    task.path =
+                                        task.playlist.current_file().cloned().ok_or_else(|| {
+                                            std::io::Error::other("資料夾內沒有支援的圖片")
+                                        })?;
+                                } else if task.archive.is_some() {
+                                    task.playlist.refresh_metadata();
+                                    task.path = task.playlist.files().first().cloned().ok_or_else(
+                                        || std::io::Error::other("壓縮檔內沒有支援的圖片"),
+                                    )?;
+                                }
+                                Ok(())
+                            })();
+                        let result = preparation
+                            .and_then(|()| core_image::io::inspect_animation(&task.path))
                             .and_then(|animated| {
                                 core_image::load_image(&task.path).map(|image| (image, animated))
                             })
@@ -101,6 +149,7 @@ impl Default for DocumentIo {
                                     task.playlist.scan_from_file(&task.path);
                                 }
                                 Some(LoadedImage {
+                                    opened_path: opened_path.canonicalize().unwrap_or(opened_path),
                                     path: task.path,
                                     pixels: image.to_rgba8(),
                                     playlist: task.playlist,
@@ -224,13 +273,14 @@ impl ImageViewerApp {
         if self
             .document_io
             .sender
-            .send(Task::Read(ReadTask {
+            .send(Task::Read(Box::new(ReadTask {
+                sort: self.preferences.current.sort,
                 id,
                 path,
                 playlist,
                 archive,
                 reference,
-            }))
+            })))
             .is_err()
         {
             if reference {
@@ -269,6 +319,32 @@ impl ImageViewerApp {
     pub fn poll_document_io(&mut self) {
         while let Ok(completion) = self.document_io.receiver.try_recv() {
             match completion {
+                Completion::ArchivePath { id, path } => {
+                    if !self
+                        .document_io
+                        .pending_main
+                        .as_ref()
+                        .is_some_and(|pending| pending.id == id)
+                    {
+                        continue;
+                    }
+                    let Some(pending) = self.document_io.pending_main.take() else {
+                        continue;
+                    };
+                    let changed = self.slider_params != pending.params
+                        || match (pending.origin, self.session.as_ref()) {
+                            (Some(origin), Some(session)) => {
+                                !Arc::ptr_eq(&origin, &session.active_image())
+                            }
+                            (None, None) => false,
+                            _ => true,
+                        };
+                    if changed && self.has_unsaved_changes() {
+                        self.defer_leave(crate::navigation_guard::LeaveAction::ArchivePath(path));
+                    } else {
+                        self.start_archive_path(path);
+                    }
+                }
                 Completion::Read {
                     id,
                     reference,
@@ -285,6 +361,14 @@ impl ImageViewerApp {
                     if !valid {
                         continue;
                     }
+                    let attempted_path = if reference {
+                        None
+                    } else {
+                        self.document_io
+                            .pending_main
+                            .as_ref()
+                            .map(|pending| pending.path.clone())
+                    };
                     let changed = if reference {
                         self.document_io.pending_reference = None;
                         false
@@ -303,10 +387,15 @@ impl ImageViewerApp {
                     };
                     match result {
                         Ok(loaded) if !reference && changed && self.has_unsaved_changes() => {
-                            self.defer_leave(crate::navigation_guard::LeaveAction::Loaded(loaded));
+                            self.defer_leave(crate::navigation_guard::LeaveAction::Loaded(
+                                Box::new(loaded),
+                            ));
                         }
                         Ok(loaded) => self.install_loaded_image(loaded),
                         Err(error) => {
+                            if let Some(path) = attempted_path {
+                                self.remove_recent(path);
+                            }
                             self.status_notification =
                                 Some((format!("載入失敗：{error}"), Instant::now()))
                         }
@@ -323,7 +412,8 @@ impl ImageViewerApp {
                     }
                     self.document_io.pending_save = None;
                     match result {
-                        Ok(playlist) => {
+                        Ok(mut playlist) => {
+                            playlist.set_sort(self.preferences.current.sort);
                             let matches_current = self.session.as_ref().is_some_and(|session| {
                                 Arc::ptr_eq(&image, &session.committed_image())
                             });

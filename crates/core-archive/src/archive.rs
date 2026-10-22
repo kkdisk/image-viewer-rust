@@ -80,27 +80,29 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
 
     while let (Some(&ca), Some(&cb)) = (chars_a.peek(), chars_b.peek()) {
         if ca.is_ascii_digit() && cb.is_ascii_digit() {
-            let mut num_a: u64 = 0;
+            let mut num_a = String::new();
             while let Some(&c) = chars_a.peek() {
                 if let Some(digit) = c.to_digit(10) {
-                    num_a = num_a.saturating_mul(10).saturating_add(digit as u64);
+                    num_a.push(char::from(b'0' + digit as u8));
                     chars_a.next();
                 } else {
                     break;
                 }
             }
 
-            let mut num_b: u64 = 0;
+            let mut num_b = String::new();
             while let Some(&c) = chars_b.peek() {
                 if let Some(digit) = c.to_digit(10) {
-                    num_b = num_b.saturating_mul(10).saturating_add(digit as u64);
+                    num_b.push(char::from(b'0' + digit as u8));
                     chars_b.next();
                 } else {
                     break;
                 }
             }
 
-            match num_a.cmp(&num_b) {
+            let num_a = num_a.trim_start_matches('0');
+            let num_b = num_b.trim_start_matches('0');
+            match num_a.len().cmp(&num_b.len()).then_with(|| num_a.cmp(num_b)) {
                 Ordering::Equal => {}
                 non_eq => return non_eq,
             }

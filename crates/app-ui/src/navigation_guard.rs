@@ -6,9 +6,10 @@ use std::path::PathBuf;
 
 pub(crate) enum LeaveAction {
     Image(PathBuf),
+    ArchivePath(PathBuf),
     Archive(ManagedArchiveSession),
     Close,
-    Loaded(crate::document_io::LoadedImage),
+    Loaded(Box<crate::document_io::LoadedImage>),
 }
 
 #[derive(Default)]
@@ -138,12 +139,16 @@ impl ImageViewerApp {
         };
         self.leave_guard.error = None;
         let result = match action {
+            LeaveAction::ArchivePath(path) => {
+                self.start_archive_path(path);
+                Ok(())
+            }
             LeaveAction::Image(path) => self
                 .open_image_path_unchecked(path)
                 .map_err(|e| e.to_string()),
             LeaveAction::Archive(session) => self.apply_archive_session_unchecked(session),
             LeaveAction::Loaded(loaded) => {
-                self.install_loaded_image(loaded);
+                self.install_loaded_image(*loaded);
                 Ok(())
             }
             LeaveAction::Close => {

@@ -4,6 +4,10 @@ use app_ui::app::ImageViewerApp;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    let (startup, startup_error) = match app_ui::startup::parse_args(std::env::args_os().skip(1)) {
+        Ok(options) => (options, None),
+        Err(error) => (Default::default(), Some(error)),
+    };
     let mut path = app_ui::preferences::config_path();
     let (settings, error) = match path.as_deref().map(app_ui::preferences::load).transpose() {
         Ok(settings) => (settings.unwrap_or_default(), None),
@@ -30,6 +34,14 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             let mut app = ImageViewerApp::new(cc);
             app.configure_preferences(settings, path);
+            if let Some(path) = startup.path
+                && let Err(error) = app.open_file_path(path)
+            {
+                app.status_notification = Some((error, std::time::Instant::now()));
+            }
+            if let Some(error) = startup_error {
+                app.status_notification = Some((error, std::time::Instant::now()));
+            }
             if let Some(error) = error {
                 app.status_notification = Some((
                     format!("偏好設定無法讀取，本次使用預設值：{error}"),

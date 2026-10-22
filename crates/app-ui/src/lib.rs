@@ -3,6 +3,7 @@
 mod animation_save;
 pub mod app;
 pub mod archive_loader;
+pub mod browsing;
 pub mod canvas;
 pub mod debounce_queue;
 mod display_texture;
@@ -13,5 +14,7 @@ pub mod navigation_guard;
 pub mod panels;
 pub mod playlist;
 pub mod preferences;
+pub mod recent;
+pub mod startup;
 pub mod theme;
 pub mod thumbnail_loader;

@@ -3,6 +3,7 @@
 **文件識別碼**：SPEC-RUST-IMAGE-VIEWER  
 **版本**：1.0.0  
 **日期**：2026-10-21  
+**0.4.0／0.5.0 補充契約**：[資源與瀏覽](SPEC_BROWSING_RESOURCES.md)
 **關聯意圖**：[docs/intent/rust_image_viewer_migration.md](docs/intent/rust_image_viewer_migration.md)
 
 ---

@@ -20,6 +20,7 @@ use crate::thumbnail_loader::ThumbnailManager;
 
 /// 主圖片瀏覽與編輯桌面應用狀態
 pub struct ImageViewerApp {
+    pub browsing: crate::browsing::BrowsingState,
     pub(crate) animated_source: bool,
     pub(crate) animation_save: Option<crate::animation_save::AnimationSave>,
     pub(crate) leave_guard: crate::navigation_guard::LeaveGuard,
@@ -102,6 +103,7 @@ pub struct ImageViewerApp {
 impl Default for ImageViewerApp {
     fn default() -> Self {
         Self {
+            browsing: Default::default(),
             animated_source: false,
             animation_save: None,
             leave_guard: crate::navigation_guard::LeaveGuard::default(),
@@ -169,30 +171,13 @@ impl ImageViewerApp {
         if self.has_pending_leave() {
             return Ok(());
         }
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
+        self.open_image_path(path)
+            .map_err(|error| error.to_string())
+    }
 
-        if ext == "zip" || ext == "7z" {
-            self.cancel_archive_loading();
-            let filename = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("壓縮檔")
-                .to_string();
-            self.status_notification = Some((
-                format!("正在背景解壓縮 '{}'...", filename),
-                std::time::Instant::now(),
-            ));
-            // 分發至背景解壓工作池，UI 主執行緒立即返回，絕不凍結
-            self.latest_archive_req_id = self.archive_loader.load_archive(path, None);
-            Ok(())
-        } else {
-            self.open_image_path(path)
-                .map_err(|e| format!("無法載入圖片: {}", e))
-        }
+    pub(crate) fn start_archive_path(&mut self, path: PathBuf) {
+        self.cancel_archive_loading();
+        self.latest_archive_req_id = self.archive_loader.load_archive(path, None);
     }
 
     /// 使用指定密碼在背景解壓並開啟壓縮檔
@@ -297,6 +282,7 @@ impl ImageViewerApp {
                     ));
                 }
                 Err(e) => {
+                    self.remove_recent(archive_res.path);
                     let msg = format!("無法開啟壓縮檔: {}", e);
                     self.archive_password_error = Some(msg.clone());
                     self.status_notification = Some((msg, std::time::Instant::now()));
@@ -309,12 +295,13 @@ impl ImageViewerApp {
 
     /// 等候當前背景解壓完成（供測試或精確同步使用，最多等待 timeout）
     pub fn wait_archive_loaded(&mut self, timeout: std::time::Duration) -> bool {
-        let target_id = self.latest_archive_req_id;
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
             self.poll_archive_loader();
             self.poll_document_io();
-            if self.received_archive_req_id >= target_id && !self.io_needs_repaint() {
+            if self.received_archive_req_id >= self.latest_archive_req_id
+                && !self.io_needs_repaint()
+            {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -339,7 +326,7 @@ impl ImageViewerApp {
             .map_err(|error| core_image::ImageError::Io(std::io::Error::other(error)))
     }
 
-    pub(crate) fn install_loaded_image(&mut self, loaded: crate::document_io::LoadedImage) {
+    pub(crate) fn install_loaded_image(&mut self, mut loaded: crate::document_io::LoadedImage) {
         if loaded.reference {
             self.reference_image = Some(Arc::new(loaded.pixels));
             self.reference_texture = None;
@@ -358,9 +345,16 @@ impl ImageViewerApp {
         {
             self.archive_session = None;
         }
+        let recent_path = self
+            .archive_session
+            .as_ref()
+            .map_or(loaded.opened_path, |archive| archive.archive_path.clone());
+        self.record_recent(recent_path);
+        loaded.playlist.set_sort(self.preferences.current.sort);
         self.debouncer.cancel_pending();
         self.pending_adjustment = None;
-        self.thumbnail_manager.clear();
+        self.thumbnail_manager
+            .set_scope(loaded.playlist.cache_scope());
         self.playlist = loaded.playlist;
         self.session = Some(EditingSession::new(loaded.pixels, Some(loaded.path)));
         self.slider_params = AdjustmentParams::default();
@@ -472,27 +466,45 @@ impl ImageViewerApp {
     /// 更新 GPU 影像紋理（主視口與雙圖左側視口）
     fn sync_texture(&mut self, ctx: &egui::Context) {
         if let Some(session) = &self.session {
-            self.active_display.sync(
+            self.active_display.sync_view(
                 ctx,
                 session.active_image(),
                 &mut self.texture,
                 "active_viewport_image",
+                &self.viewport,
+                if self.comparison.is_active {
+                    "right_canvas_viewport"
+                } else {
+                    "single_canvas_viewport"
+                },
             );
             if self.comparison.is_active {
                 match self.comparison.source {
-                    ComparisonSource::Original => self.original_display.sync(
+                    ComparisonSource::Original => self.original_display.sync_view(
                         ctx,
                         session.original_image(),
                         &mut self.original_texture,
                         "original_viewport_image",
+                        if self.comparison.sync_viewport {
+                            &self.viewport
+                        } else {
+                            &self.left_viewport
+                        },
+                        "left_canvas_viewport",
                     ),
                     ComparisonSource::Reference => {
                         if let Some(image) = &self.reference_image {
-                            self.reference_display.sync(
+                            self.reference_display.sync_view(
                                 ctx,
                                 Arc::clone(image),
                                 &mut self.reference_texture,
                                 "reference_viewport_image",
+                                if self.comparison.sync_viewport {
+                                    &self.viewport
+                                } else {
+                                    &self.left_viewport
+                                },
+                                "left_canvas_viewport",
                             );
                         } else {
                             self.reference_texture = None;
@@ -511,7 +523,7 @@ impl ImageViewerApp {
 
     /// 提交背景直方圖運算並接收符合目前影像的結果，不等待像素統計
     pub fn sync_histogram(&mut self) {
-        if !self.show_side_panel {
+        if !self.show_side_panel || self.browsing.fullscreen {
             return;
         }
         if let Some(sess) = &self.session {
@@ -700,138 +712,91 @@ impl ImageViewerApp {
 
     /// 處理鍵盤快捷鍵
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.has_pending_leave() || ctx.wants_keyboard_input() {
+        use crate::browsing::Action;
+        if self.has_pending_leave() || self.is_saving() {
             return;
         }
-        let mut do_prev = false;
-        let mut do_next = false;
-        let mut do_first = false;
-        let mut do_last = false;
-        let mut do_undo = false;
-        let mut do_redo = false;
-        let mut do_save = false;
-        let mut do_save_as = false;
-
-        ctx.input(|i| {
-            // Ctrl + O: 開啟圖片
-            if i.modifiers.command && !i.modifiers.shift && i.key_pressed(Key::O) {
-                self.open_file_dialog();
+        if ctx.input(|input| input.key_pressed(Key::Escape)) {
+            if self.browsing.help {
+                self.browsing.help = false;
+            } else if self.show_about_dialog {
+                self.show_about_dialog = false;
+            } else if self.duplicate_finder_state.is_open {
+                self.duplicate_finder_state.close();
+            } else if self.show_password_dialog {
+                self.cancel_archive_loading();
+            } else if self.browsing.fullscreen {
+                self.toggle_fullscreen(ctx);
             }
-
-            // Ctrl + S / Ctrl + Shift + S: 儲存 / 另存新檔
-            if i.modifiers.command && i.key_pressed(Key::S) {
-                if i.modifiers.shift {
-                    do_save_as = true;
-                } else {
-                    do_save = true;
+            return;
+        }
+        let actions = crate::browsing::actions(ctx);
+        if actions.contains(&Action::Fullscreen) {
+            self.toggle_fullscreen(ctx);
+            return;
+        }
+        if self.browsing.help {
+            if ctx.input(|input| input.key_pressed(Key::F1)) {
+                self.browsing.help = false;
+            }
+            return;
+        }
+        if self.show_about_dialog
+            || self.show_password_dialog
+            || self.duplicate_finder_state.is_open
+            || ctx.wants_keyboard_input()
+        {
+            return;
+        }
+        for action in actions {
+            match action {
+                Action::Open => self.open_file_dialog(),
+                Action::Save => {
+                    self.save_current_image();
                 }
-            }
-
-            // Ctrl + Z / Ctrl + Shift + Z / Ctrl + Y: 復原 / 重做
-            if i.modifiers.command && i.key_pressed(Key::Z) {
-                if i.modifiers.shift {
-                    do_redo = true;
-                } else {
-                    do_undo = true;
+                Action::SaveAs => {
+                    self.save_image_as_dialog();
                 }
-            }
-            if i.modifiers.command && i.key_pressed(Key::Y) {
-                do_redo = true;
-            }
-
-            // Ctrl + D: 切換雙圖分割比對模式
-            if i.modifiers.command && i.key_pressed(Key::D) {
-                self.toggle_side_by_side();
-            }
-
-            // 圖片前後巡迴導覽 (左/右方向鍵, PageUp/PageDown, Home/End)
-            if i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::PageUp) {
-                do_prev = true;
-            }
-            if i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::PageDown) {
-                do_next = true;
-            }
-            if i.key_pressed(Key::Home) {
-                do_first = true;
-            }
-            if i.key_pressed(Key::End) {
-                do_last = true;
-            }
-
-            // 視口縮放快捷鍵
-            if i.key_pressed(Key::Num0) || i.key_pressed(Key::F) {
-                self.apply_zoom_action(crate::panels::ZoomAction::Fit);
-            }
-            if i.key_pressed(Key::Num1) {
-                self.apply_zoom_action(crate::panels::ZoomAction::Actual);
-            }
-            if i.key_pressed(Key::Equals) || i.key_pressed(Key::Plus) {
-                self.apply_zoom_action(crate::panels::ZoomAction::In);
-            }
-            if i.key_pressed(Key::Minus) {
-                self.apply_zoom_action(crate::panels::ZoomAction::Out);
-            }
-
-            // M / Shift + M: 局部放大鏡開關與倍率切換 (2x -> 4x -> 8x)
-            if !i.modifiers.command && i.key_pressed(Key::M) {
-                if i.modifiers.shift {
+                Action::Undo => self.undo(),
+                Action::Redo => self.redo(),
+                Action::Compare => self.toggle_side_by_side(),
+                Action::Prev => self.navigate_prev(),
+                Action::Next => self.navigate_next(),
+                Action::First => self.navigate_to(0),
+                Action::Last => {
+                    if let Some(last) = self.playlist.len().checked_sub(1) {
+                        self.navigate_to(last);
+                    }
+                }
+                Action::Fit => self.apply_zoom_action(crate::panels::ZoomAction::Fit),
+                Action::Actual => self.apply_zoom_action(crate::panels::ZoomAction::Actual),
+                Action::In => self.apply_zoom_action(crate::panels::ZoomAction::In),
+                Action::Out => self.apply_zoom_action(crate::panels::ZoomAction::Out),
+                Action::Magnifier => self.magnifier_enabled = !self.magnifier_enabled,
+                Action::MagnifierZoom => {
                     self.magnifier_zoom = match self.magnifier_zoom {
                         2 => 4,
                         4 => 8,
                         _ => 2,
-                    };
-                    self.status_notification = Some((
-                        format!("🔍 局部放大鏡倍率切換為 {}x", self.magnifier_zoom),
-                        std::time::Instant::now(),
-                    ));
-                } else {
-                    self.magnifier_enabled = !self.magnifier_enabled;
-                    if self.magnifier_enabled {
-                        self.status_notification = Some((
-                            format!(
-                                "🔍 局部放大鏡已開啟 ({}x，Shift+M 可切換倍率)",
-                                self.magnifier_zoom
-                            ),
-                            std::time::Instant::now(),
-                        ));
-                    } else {
-                        self.status_notification =
-                            Some(("🔍 局部放大鏡已關閉".to_string(), std::time::Instant::now()));
                     }
                 }
+                Action::Fullscreen => self.toggle_fullscreen(ctx),
+                Action::Help => self.browsing.help = true,
             }
-        });
-
-        if do_undo {
-            self.undo();
-        }
-        if do_redo {
-            self.redo();
-        }
-        if do_save {
-            self.save_current_image();
-        }
-        if do_save_as {
-            self.save_image_as_dialog();
-        }
-        if do_prev {
-            self.navigate_prev();
-        }
-        if do_next {
-            self.navigate_next();
-        }
-        if do_first {
-            self.navigate_to(0);
-        }
-        if do_last && let Some(last) = self.playlist.len().checked_sub(1) {
-            self.navigate_to(last);
         }
     }
 }
 
 impl eframe::App for ImageViewerApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.preferences.flush();
+        if let Some(error) = self.preferences.finish() {
+            rfd::MessageDialog::new()
+                .set_title("無法儲存偏好設定")
+                .set_description(error)
+                .set_level(rfd::MessageLevel::Error)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -883,6 +848,10 @@ impl eframe::App for ImageViewerApp {
 
         // 2. 處理鍵盤快捷鍵
         self.handle_shortcuts(ctx);
+        if self.has_pending_leave() || self.is_saving() {
+            self.show_guarded_editor(ctx);
+            return;
+        }
 
         // 3. 輪詢背景微調防抖計算結果
         if let Some(res) = self.debouncer.poll() {
@@ -910,179 +879,200 @@ impl eframe::App for ImageViewerApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
 
-        // 5. 頂部選單列
-        let can_undo = self.session.as_ref().map(|s| s.can_undo()).unwrap_or(false);
-        let can_redo = self.session.as_ref().map(|s| s.can_redo()).unwrap_or(false);
+        if !self.browsing.fullscreen {
+            // 5. 頂部選單列
+            let can_undo = self.session.as_ref().map(|s| s.can_undo()).unwrap_or(false);
+            let can_redo = self.session.as_ref().map(|s| s.can_redo()).unwrap_or(false);
 
-        let mut menu_state = crate::panels::MenuBarState {
-            can_undo,
-            can_redo,
-            show_side_panel: &mut self.show_side_panel,
-            show_filmstrip: &mut self.show_filmstrip,
-            is_side_by_side: &mut self.comparison.is_active,
-            sync_viewport: &mut self.comparison.sync_viewport,
-            magnifier_enabled: &mut self.magnifier_enabled,
-        };
+            let mut menu_state = crate::panels::MenuBarState {
+                recent: &self.preferences.current.recent,
+                sort: self.preferences.current.sort,
+                can_undo,
+                can_redo,
+                show_side_panel: &mut self.show_side_panel,
+                show_filmstrip: &mut self.show_filmstrip,
+                is_side_by_side: &mut self.comparison.is_active,
+                sync_viewport: &mut self.comparison.sync_viewport,
+                magnifier_enabled: &mut self.magnifier_enabled,
+            };
 
-        if let Some(action) = MenuBar::show(ctx, &mut menu_state) {
-            match action {
-                crate::panels::MenuAction::Open => self.open_file_dialog(),
-                crate::panels::MenuAction::Save => {
-                    self.save_current_image();
-                }
-                crate::panels::MenuAction::SaveAs => {
-                    self.save_image_as_dialog();
-                }
-                crate::panels::MenuAction::Exit => {
-                    if self.request_close() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if let Some(action) = MenuBar::show(ctx, &mut menu_state) {
+                match action {
+                    crate::panels::MenuAction::OpenFolder => {
+                        if let Some(path) = rfd::FileDialog::new().pick_folder()
+                            && let Err(error) = self.open_image_path(path)
+                        {
+                            self.status_notification =
+                                Some((error.to_string(), std::time::Instant::now()));
+                        }
                     }
+                    crate::panels::MenuAction::OpenRecent(index) => {
+                        if let Some(entry) = self.preferences.current.recent.get(index).cloned()
+                            && let Err(error) = self.open_file_path(entry.path)
+                        {
+                            self.status_notification = Some((error, std::time::Instant::now()));
+                        }
+                    }
+                    crate::panels::MenuAction::Sort(options) => self.set_sort_options(options),
+                    crate::panels::MenuAction::Fullscreen => self.toggle_fullscreen(ctx),
+                    crate::panels::MenuAction::Shortcuts => self.browsing.help = true,
+                    crate::panels::MenuAction::Open => self.open_file_dialog(),
+                    crate::panels::MenuAction::Save => {
+                        self.save_current_image();
+                    }
+                    crate::panels::MenuAction::SaveAs => {
+                        self.save_image_as_dialog();
+                    }
+                    crate::panels::MenuAction::Exit => {
+                        if self.request_close() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+                    crate::panels::MenuAction::Undo => self.undo(),
+                    crate::panels::MenuAction::Redo => self.redo(),
+                    crate::panels::MenuAction::Reset100 => self.viewport.reset_actual_size(),
+                    crate::panels::MenuAction::ResetFit => self.viewport.reset_fit_window(),
+                    crate::panels::MenuAction::DuplicateFinder => {
+                        let cur_dir = self
+                            .session
+                            .as_ref()
+                            .and_then(|s| s.source_path())
+                            .and_then(|p| p.parent())
+                            .map(|p| p.to_path_buf());
+                        self.duplicate_finder_state.open_with_dir(cur_dir);
+                    }
+                    crate::panels::MenuAction::About => self.show_about_dialog = true,
                 }
-                crate::panels::MenuAction::Undo => self.undo(),
-                crate::panels::MenuAction::Redo => self.redo(),
-                crate::panels::MenuAction::Reset100 => self.viewport.reset_actual_size(),
-                crate::panels::MenuAction::ResetFit => self.viewport.reset_fit_window(),
-                crate::panels::MenuAction::DuplicateFinder => {
-                    let cur_dir = self
-                        .session
-                        .as_ref()
-                        .and_then(|s| s.source_path())
-                        .and_then(|p| p.parent())
-                        .map(|p| p.to_path_buf());
-                    self.duplicate_finder_state.open_with_dir(cur_dir);
+            }
+
+            if self.has_pending_leave() || self.is_saving() {
+                self.show_guarded_editor(ctx);
+                return;
+            }
+
+            // 6. 底部狀態列
+            let (filename, dimensions) = match &self.session {
+                Some(sess) => {
+                    let name = sess
+                        .source_path()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str());
+                    let dims = (sess.active_image().width(), sess.active_image().height());
+                    (name, Some(dims))
                 }
-                crate::panels::MenuAction::About => self.show_about_dialog = true,
-            }
-        }
+                None => (None, None),
+            };
 
-        if self.has_pending_leave() || self.is_saving() {
-            self.show_guarded_editor(ctx);
-            return;
-        }
+            let playlist_info = self
+                .playlist
+                .current_index()
+                .map(|idx| (idx, self.playlist.len()));
 
-        // 6. 底部狀態列
-        let (filename, dimensions) = match &self.session {
-            Some(sess) => {
-                let name = sess
-                    .source_path()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str());
-                let dims = (sess.active_image().width(), sess.active_image().height());
-                (name, Some(dims))
-            }
-            None => (None, None),
-        };
-
-        let playlist_info = self
-            .playlist
-            .current_index()
-            .map(|idx| (idx, self.playlist.len()));
-
-        let status_msg = if self.is_loading_image() {
-            Some("正在背景載入圖片…")
-        } else if let Some((msg, ts)) = &self.status_notification {
-            if ts.elapsed().as_secs() < 8 {
-                Some(msg.as_str())
+            let status_msg = if self.is_loading_image() {
+                Some("正在背景載入圖片…")
+            } else if let Some((msg, ts)) = &self.status_notification {
+                if ts.elapsed().as_secs() < 8 {
+                    Some(msg.as_str())
+                } else {
+                    None
+                }
             } else {
                 None
+            };
+
+            let zoom_action = StatusBar::show(
+                ctx,
+                &crate::panels::StatusBarState {
+                    animated: self.animated_source,
+                    filename,
+                    dimensions,
+                    zoom: self.viewport.zoom,
+                    document: self.document_status(),
+                    playlist_info,
+                    notification: status_msg,
+                },
+            );
+            if let Some(action) = zoom_action {
+                self.apply_zoom_action(action);
             }
-        } else {
-            None
-        };
 
-        let zoom_action = StatusBar::show(
-            ctx,
-            &crate::panels::StatusBarState {
-                animated: self.animated_source,
-                filename,
-                dimensions,
-                zoom: self.viewport.zoom,
-                document: self.document_status(),
-                playlist_info,
-                notification: status_msg,
-            },
-        );
-        if let Some(action) = zoom_action {
-            self.apply_zoom_action(action);
-        }
+            // 7. 底部 Filmstrip 縮圖列
+            let mut nav_to_idx = None;
+            let mut do_prev = false;
+            let mut do_next = false;
 
-        // 7. 底部 Filmstrip 縮圖列
-        let mut nav_to_idx = None;
-        let mut do_prev = false;
-        let mut do_next = false;
+            FilmstripPanel::show(
+                ctx,
+                &mut self.show_filmstrip,
+                &self.playlist,
+                &mut self.thumbnail_manager,
+                &mut |idx| nav_to_idx = Some(idx),
+                &mut || do_prev = true,
+                &mut || do_next = true,
+            );
 
-        FilmstripPanel::show(
-            ctx,
-            &mut self.show_filmstrip,
-            &self.playlist,
-            &mut self.thumbnail_manager,
-            &mut |idx| nav_to_idx = Some(idx),
-            &mut || do_prev = true,
-            &mut || do_next = true,
-        );
+            if let Some(idx) = nav_to_idx {
+                self.navigate_to(idx);
+            }
+            if do_prev {
+                self.navigate_prev();
+            }
+            if do_next {
+                self.navigate_next();
+            }
 
-        if let Some(idx) = nav_to_idx {
-            self.navigate_to(idx);
-        }
-        if do_prev {
-            self.navigate_prev();
-        }
-        if do_next {
-            self.navigate_next();
-        }
+            if self.has_pending_leave() {
+                self.show_guarded_editor(ctx);
+                return;
+            }
 
-        if self.has_pending_leave() {
-            self.show_guarded_editor(ctx);
-            return;
-        }
+            // 8. 側邊微調面板
+            let has_image = self.session.is_some();
+            let is_computing = self.is_preview_pending();
+            let mut adjustment_action = None;
 
-        // 8. 側邊微調面板
-        let has_image = self.session.is_some();
-        let is_computing = self.is_preview_pending();
-        let mut adjustment_action = None;
+            let mut adj_state = AdjustmentPanelState {
+                white_balance_open: &mut self.white_balance_open,
+                fine_tune_open: &mut self.fine_tune_open,
+                is_open: &mut self.show_side_panel,
+                has_image,
+                params: &mut self.slider_params,
+                is_computing,
+                histogram_data: self.cached_histogram.as_ref(),
+                histogram_mode: &mut self.histogram_mode,
+            };
 
-        let mut adj_state = AdjustmentPanelState {
-            white_balance_open: &mut self.white_balance_open,
-            fine_tune_open: &mut self.fine_tune_open,
-            is_open: &mut self.show_side_panel,
-            has_image,
-            params: &mut self.slider_params,
-            is_computing,
-            histogram_data: self.cached_histogram.as_ref(),
-            histogram_mode: &mut self.histogram_mode,
-        };
+            AdjustmentPanel::show(ctx, &mut adj_state, &mut adjustment_action);
 
-        AdjustmentPanel::show(ctx, &mut adj_state, &mut adjustment_action);
-
-        match adjustment_action {
-            Some(crate::panels::AdjustmentAction::Change) => {
-                if let Some(sess) = &mut self.session {
-                    if self.slider_params.is_identity() {
-                        self.debouncer.cancel_pending();
-                        self.pending_adjustment = None;
-                        sess.cancel_adjustments();
-                    } else {
-                        let base = sess.committed_image();
-                        self.pending_adjustment =
-                            Some(self.debouncer.request(base, self.slider_params));
+            match adjustment_action {
+                Some(crate::panels::AdjustmentAction::Change) => {
+                    if let Some(sess) = &mut self.session {
+                        if self.slider_params.is_identity() {
+                            self.debouncer.cancel_pending();
+                            self.pending_adjustment = None;
+                            sess.cancel_adjustments();
+                        } else {
+                            let base = sess.committed_image();
+                            self.pending_adjustment =
+                                Some(self.debouncer.request(base, self.slider_params));
+                        }
                     }
                 }
-            }
-            Some(crate::panels::AdjustmentAction::Reset)
-            | Some(crate::panels::AdjustmentAction::Cancel) => {
-                self.debouncer.cancel_pending();
-                self.pending_adjustment = None;
-                self.slider_params = AdjustmentParams::default();
-                if let Some(sess) = &mut self.session {
-                    sess.cancel_adjustments();
+                Some(crate::panels::AdjustmentAction::Reset)
+                | Some(crate::panels::AdjustmentAction::Cancel) => {
+                    self.debouncer.cancel_pending();
+                    self.pending_adjustment = None;
+                    self.slider_params = AdjustmentParams::default();
+                    if let Some(sess) = &mut self.session {
+                        sess.cancel_adjustments();
+                    }
                 }
+                Some(crate::panels::AdjustmentAction::Apply) => {
+                    self.apply_current_adjustments();
+                }
+                None => {}
             }
-            Some(crate::panels::AdjustmentAction::Apply) => {
-                self.apply_current_adjustments();
-            }
-            None => {}
         }
-
         // 9. 中央 GPU 加速影像畫布 (支援單圖或雙圖分割對比)
         CentralPanel::default()
             .frame(egui::Frame::none())
@@ -1111,6 +1101,12 @@ impl eframe::App for ImageViewerApp {
 
                 let active_img_ref = self.session.as_ref().map(|s| s.active_image());
                 let mut canvas_state = CanvasState {
+                    hide_controls: self.browsing.fullscreen,
+                    texture_region: self.active_display.region,
+                    left_region: match self.comparison.source {
+                        ComparisonSource::Original => self.original_display.region,
+                        ComparisonSource::Reference => self.reference_display.region,
+                    },
                     texture: self.texture.as_ref(),
                     image_dims: dims,
                     viewport: &mut self.viewport,
@@ -1119,7 +1115,7 @@ impl eframe::App for ImageViewerApp {
                     left_viewport: &mut self.left_viewport,
                     comparison: &mut self.comparison,
                     image_data: active_img_ref.as_deref(),
-                    magnifier_enabled: self.magnifier_enabled,
+                    magnifier_enabled: self.magnifier_enabled && !self.browsing.fullscreen,
                     magnifier_zoom: self.magnifier_zoom,
                 };
 
@@ -1283,6 +1279,7 @@ impl eframe::App for ImageViewerApp {
             ctx.request_repaint();
         }
         self.show_leave_dialog(ctx);
+        self.show_browsing_overlay(ctx);
         self.update_preferences(ctx);
     }
 }
@@ -1290,6 +1287,75 @@ impl eframe::App for ImageViewerApp {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn folder_open_is_background_guarded_and_remembered() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("相片.zip");
+        std::fs::create_dir(&folder).unwrap();
+        let first = folder.join("圖2.png");
+        let second = folder.join("圖10.png");
+        image::RgbaImage::new(2, 3).save(&first).unwrap();
+        image::RgbaImage::new(3, 2).save(&second).unwrap();
+        let mut app = ImageViewerApp::default();
+        app.open_file_path(folder.clone()).unwrap();
+        assert!(app.wait_document_io(Duration::from_secs(5)));
+        assert_eq!(
+            app.session.as_ref().unwrap().source_path(),
+            Some(first.as_path())
+        );
+        assert!(crate::recent::same_path(
+            &app.preferences.current.recent[0].path,
+            &folder.canonicalize().unwrap()
+        ));
+        app.session
+            .as_mut()
+            .unwrap()
+            .push_action(image::RgbaImage::new(2, 3), "編輯");
+        app.open_file_path(dir.path().to_path_buf()).unwrap();
+        assert!(app.has_pending_leave());
+        assert!(!app.is_loading_image());
+    }
+
+    #[test]
+    fn escape_closes_help_before_fullscreen_and_keeps_layout_flags() {
+        let mut app = ImageViewerApp::default();
+        let ctx = egui::Context::default();
+        app.browsing.fullscreen = true;
+        app.browsing.help = true;
+        for expected in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+                |ctx| app.handle_shortcuts(ctx),
+            );
+            assert_eq!(app.browsing.fullscreen, expected);
+            assert!(!app.browsing.help);
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: Key::Escape,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+                |_| {},
+            );
+        }
+        assert!(app.show_side_panel && app.show_filmstrip);
+    }
 
     #[test]
     fn all_display_sources_fit_gpu_limit_and_save_full_resolution() {

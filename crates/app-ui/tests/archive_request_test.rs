@@ -24,6 +24,18 @@ fn drain_result(app: &mut ImageViewerApp) {
     }
 }
 
+fn wait_archive_started(app: &mut ImageViewerApp) {
+    let start = Instant::now();
+    while app.latest_archive_req_id == 0 {
+        app.poll_document_io();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "背景路徑辨識未完成"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn newer_image_survives_old_archive_result() {
     let dir = tempfile::tempdir().unwrap();
@@ -35,6 +47,7 @@ fn newer_image_survives_old_archive_result() {
     make_zip(&archive_path);
     let mut app = ImageViewerApp::default();
     app.open_file_path(archive_path).unwrap();
+    wait_archive_started(&mut app);
     app.open_file_path(image_path.clone()).unwrap();
     assert!(app.wait_document_io(Duration::from_secs(5)));
     drain_result(&mut app);
@@ -52,6 +65,7 @@ fn cancelled_archive_does_not_replace_session() {
     make_zip(&path);
     let mut app = ImageViewerApp::default();
     app.open_file_path(path).unwrap();
+    wait_archive_started(&mut app);
     app.cancel_archive_loading();
     drain_result(&mut app);
     assert!(app.session.is_none());
@@ -65,6 +79,7 @@ fn old_error_does_not_interrupt_new_archive() {
     make_zip(&latest);
     let mut app = ImageViewerApp::default();
     app.open_file_path(dir.path().join("missing.zip")).unwrap();
+    wait_archive_started(&mut app);
     app.open_file_path(latest.clone()).unwrap();
     assert!(app.wait_archive_loaded(Duration::from_secs(5)));
     assert_eq!(app.archive_session.as_ref().unwrap().archive_path, latest);

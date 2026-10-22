@@ -1,7 +1,22 @@
 //! 目錄檔案列表與圖片巡迴導覽管理
 
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::{collections::HashMap, time::SystemTime};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SortMode {
+    #[default]
+    Natural,
+    Modified,
+    Size,
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SortOptions {
+    pub mode: SortMode,
+    pub descending: bool,
+}
 
 /// 支援的圖片副檔名清單（小寫）
 pub const SUPPORTED_EXTENSIONS: &[&str] =
@@ -27,6 +42,8 @@ pub struct ImagePlaylist {
     current_index: Option<usize>,
     /// 目前清單所屬的目錄
     current_dir: Option<PathBuf>,
+    attributes: HashMap<PathBuf, (u64, Option<SystemTime>)>,
+    sort: SortOptions,
 }
 
 #[allow(dead_code)]
@@ -72,6 +89,7 @@ impl ImagePlaylist {
         self.files = image_files;
         self.current_index = current_idx;
         self.current_dir = Some(parent);
+        self.refresh_metadata();
     }
 
     /// 設定自訂圖片清單（如從壓縮包解壓出的圖片集）
@@ -79,6 +97,70 @@ impl ImagePlaylist {
         self.files = files;
         self.current_index = if self.files.is_empty() { None } else { Some(0) };
         self.current_dir = None;
+        self.attributes.clear();
+        self.set_sort(self.sort);
+    }
+
+    /// 只在背景載入工作使用，避免排序時於介面執行緒查詢檔案資料。
+    pub fn refresh_metadata(&mut self) {
+        self.attributes = self
+            .files
+            .iter()
+            .filter_map(|path| {
+                let metadata = fs::metadata(path).ok()?;
+                Some((path.clone(), (metadata.len(), metadata.modified().ok())))
+            })
+            .collect();
+        self.set_sort(self.sort);
+    }
+
+    pub fn scan_directory(&mut self, dir: &Path) -> std::io::Result<()> {
+        self.files = fs::read_dir(dir)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file() && is_supported_image(path))
+            .collect();
+        self.current_index = None;
+        self.current_dir = Some(dir.to_path_buf());
+        self.refresh_metadata();
+        self.current_index = if self.files.is_empty() { None } else { Some(0) };
+        Ok(())
+    }
+
+    pub fn set_sort(&mut self, sort: SortOptions) {
+        let selected = self.current_file().cloned();
+        let attributes = &self.attributes;
+        self.files.sort_by(|a, b| {
+            let natural = || {
+                core_archive::natural_cmp(
+                    &a.file_name().unwrap_or_default().to_string_lossy(),
+                    &b.file_name().unwrap_or_default().to_string_lossy(),
+                )
+            };
+            let primary = match sort.mode {
+                SortMode::Natural => {
+                    if sort.descending {
+                        natural().reverse()
+                    } else {
+                        natural()
+                    }
+                }
+                SortMode::Modified => compare_optional(
+                    attributes.get(a).and_then(|entry| entry.1),
+                    attributes.get(b).and_then(|entry| entry.1),
+                    sort.descending,
+                ),
+                SortMode::Size => compare_optional(
+                    attributes.get(a).map(|entry| entry.0),
+                    attributes.get(b).map(|entry| entry.0),
+                    sort.descending,
+                ),
+            };
+            primary.then_with(natural).then_with(|| a.cmp(b))
+        });
+        self.current_index =
+            selected.and_then(|path| self.files.iter().position(|candidate| candidate == &path));
+        self.sort = sort;
     }
 
     /// 在現有清單中更新目前檔案之索引（若檔案已在清單中則不重新掃描目錄）
@@ -109,6 +191,13 @@ impl ImagePlaylist {
     /// 取得所有檔案路徑列表切片
     pub fn files(&self) -> &[PathBuf] {
         &self.files
+    }
+
+    /// 快取範圍識別不讀取磁碟；壓縮清單以受管理的暫存目錄區分。
+    pub fn cache_scope(&self) -> Option<PathBuf> {
+        self.current_dir
+            .clone()
+            .or_else(|| self.files.first()?.parent().map(Path::to_path_buf))
     }
 
     /// 取得目前指向的檔案路徑
@@ -171,5 +260,71 @@ impl ImagePlaylist {
         } else {
             self.jump_to(self.files.len() - 1)
         }
+    }
+}
+
+fn compare_optional<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            if descending {
+                b.cmp(&a)
+            } else {
+                a.cmp(&b)
+            }
+        }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn natural_and_metadata_sorts_preserve_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("相片2.png");
+        let b = dir.path().join("相片10.png");
+        let c = dir.path().join("相片100000000000000000000.png");
+        fs::write(&a, [0; 3]).unwrap();
+        fs::write(&b, [0; 1]).unwrap();
+        fs::write(&c, [0; 2]).unwrap();
+        let mut list = ImagePlaylist::new();
+        list.scan_directory(dir.path()).unwrap();
+        assert_eq!(list.files(), &[a.clone(), b.clone(), c.clone()]);
+        list.try_select_existing(&b);
+        list.set_sort(SortOptions {
+            mode: SortMode::Size,
+            descending: false,
+        });
+        assert_eq!(list.files(), &[b.clone(), c.clone(), a.clone()]);
+        assert_eq!(list.current_file(), Some(&b));
+        list.set_sort(SortOptions {
+            mode: SortMode::Natural,
+            descending: true,
+        });
+        assert_eq!(list.files(), &[c.clone(), b.clone(), a.clone()]);
+        assert_eq!(list.current_file(), Some(&b));
+        for (path, seconds) in [(&a, 100), (&b, 300), (&c, 200)] {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+                .unwrap();
+        }
+        list.refresh_metadata();
+        list.set_sort(SortOptions {
+            mode: SortMode::Modified,
+            descending: false,
+        });
+        assert_eq!(list.files(), &[a, c, b.clone()]);
+        assert_eq!(list.current_file(), Some(&b));
+        assert_eq!(
+            core_archive::natural_cmp("x100000000000000000000", "x99999999999999999999"),
+            std::cmp::Ordering::Greater
+        );
     }
 }
