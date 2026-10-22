@@ -1,18 +1,21 @@
 //! GPU 加速之圖片視口畫布 (平移、滾輪縮放、最適視窗、雙圖分割同步比對視圖)
 
-use std::path::PathBuf;
-use egui::{
-    pos2, vec2, Color32, FontId, Id, Rect, Response, RichText, Rounding, Sense, Stroke,
-    TextureHandle, Ui, UiBuilder,
-};
-use viewer_state::ViewportState;
 use crate::theme::ThemeColors;
+use egui::{
+    Color32, FontId, Id, Rect, Response, RichText, Rounding, Sense, Stroke, TextureHandle, Ui,
+    UiBuilder, pos2, vec2,
+};
+use std::path::PathBuf;
+use viewer_state::ViewportState;
+
+pub mod magnifier;
+pub use magnifier::MagnifierWidget;
 
 /// 雙圖比對來源
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ComparisonSource {
     #[default]
-    Original,  // 原始載入底圖
+    Original, // 原始載入底圖
     Reference, // 外部參考圖片
 }
 
@@ -54,6 +57,9 @@ pub struct CanvasState<'a> {
     pub left_dims: Option<(u32, u32)>,
     pub left_viewport: &'a mut ViewportState,
     pub comparison: &'a mut ComparisonConfig,
+    pub image_data: Option<&'a image::RgbaImage>,
+    pub magnifier_enabled: bool,
+    pub magnifier_zoom: u32,
 }
 
 /// 中央影像畫布視圖
@@ -61,20 +67,16 @@ pub struct CanvasView;
 
 impl CanvasView {
     /// 繪製中央畫布區域（自動依據 ComparisonConfig 呈現單圖或雙圖比對模式）
-    pub fn show(
-        ui: &mut Ui,
-        state: &mut CanvasState<'_>,
-        action: &mut Option<ComparisonAction>,
-    ) {
+    pub fn show(ui: &mut Ui, state: &mut CanvasState<'_>, action: &mut Option<ComparisonAction>) {
         let available_size = ui.available_size();
         let (rect, _response) = ui.allocate_exact_size(available_size, Sense::hover());
 
         // 畫布總底色
         ui.painter().rect_filled(rect, 0.0, ThemeColors::BG_CANVAS);
 
-        if !state.comparison.is_active {
+        let active_image_rect = if !state.comparison.is_active {
             // 單圖模式
-            Self::render_viewport(
+            let (_resp, img_rect) = Self::render_viewport(
                 ui,
                 rect,
                 Id::new("single_canvas_viewport"),
@@ -83,6 +85,7 @@ impl CanvasView {
                 state.viewport,
                 None,
             );
+            img_rect
         } else {
             // 雙圖分割模式 (50% : 50%)
             let split_width = (rect.width() - 2.0) * 0.5;
@@ -106,7 +109,7 @@ impl CanvasView {
             };
 
             // 若開啟同步視口，兩者共享右側的主 viewport 狀態
-            if state.comparison.sync_viewport {
+            let right_img_rect = if state.comparison.sync_viewport {
                 // 渲染左側視口
                 Self::render_viewport(
                     ui,
@@ -119,7 +122,7 @@ impl CanvasView {
                 );
 
                 // 渲染右側視口
-                Self::render_viewport(
+                let (_resp, img_rect) = Self::render_viewport(
                     ui,
                     right_rect,
                     Id::new("right_canvas_viewport"),
@@ -128,6 +131,7 @@ impl CanvasView {
                     state.viewport,
                     Some("✏️ 目前編輯 (Current Edit)"),
                 );
+                img_rect
             } else {
                 // 獨立視口平移與縮放
                 Self::render_viewport(
@@ -140,7 +144,7 @@ impl CanvasView {
                     Some(&left_label),
                 );
 
-                Self::render_viewport(
+                let (_resp, img_rect) = Self::render_viewport(
                     ui,
                     right_rect,
                     Id::new("right_canvas_viewport"),
@@ -149,21 +153,35 @@ impl CanvasView {
                     state.viewport,
                     Some("✏️ 目前編輯 (Current Edit)"),
                 );
-            }
+                img_rect
+            };
 
             // 繪製中央垂直分割線
             let split_line_x = rect.min.x + split_width + 1.0;
             ui.painter().line_segment(
-                [pos2(split_line_x, rect.min.y), pos2(split_line_x, rect.max.y)],
+                [
+                    pos2(split_line_x, rect.min.y),
+                    pos2(split_line_x, rect.max.y),
+                ],
                 Stroke::new(2.0, ThemeColors::BORDER),
             );
 
             // 繪製頂部浮動對比控制條 (Floating HUD)
             Self::render_comparison_hud(ui, rect, state.comparison, action);
+
+            right_img_rect
+        };
+
+        // 若啟用局部放大鏡，於最上層繪製放大鏡浮動 HUD
+        if state.magnifier_enabled
+            && let (Some(img_rect), Some(img)) = (active_image_rect, state.image_data)
+            && let Some(cursor_pos) = ui.input(|i| i.pointer.hover_pos())
+        {
+            MagnifierWidget::render(ui, rect, img_rect, img, state.magnifier_zoom, cursor_pos);
         }
     }
 
-    /// 渲染單個視口畫布與處理互動
+    /// 渲染單個視口畫布與處理互動，並回傳 (Response, 影像繪製區域)
     fn render_viewport(
         ui: &mut Ui,
         rect: Rect,
@@ -172,8 +190,9 @@ impl CanvasView {
         image_dims: Option<(u32, u32)>,
         viewport: &mut ViewportState,
         label: Option<&str>,
-    ) -> Response {
+    ) -> (Response, Option<Rect>) {
         let response = ui.interact(rect, id, Sense::click_and_drag());
+        let mut rendered_image_rect = None;
 
         // 設置局部裁切範圍，防止圖片放大平移時超出視口
         let painter = ui.painter().with_clip_rect(rect);
@@ -202,6 +221,7 @@ impl CanvasView {
             let display_size = vec2(img_w * current_scale, img_h * current_scale);
             let center_pos = rect.center() + vec2(viewport.pan.0, viewport.pan.1);
             let image_rect = Rect::from_center_size(center_pos, display_size);
+            rendered_image_rect = Some(image_rect);
 
             // 繪製微縮棋盤格襯底
             Self::draw_checkerboard(&painter, image_rect);
@@ -245,8 +265,12 @@ impl CanvasView {
                 let new_zoom = (base_zoom * zoom_factor).clamp(0.02, 50.0);
                 let actual_factor = new_zoom / base_zoom;
 
-                viewport.pan.0 = cursor.x - rect.center().x - (cursor.x - rect.center().x - viewport.pan.0) * actual_factor;
-                viewport.pan.1 = cursor.y - rect.center().y - (cursor.y - rect.center().y - viewport.pan.1) * actual_factor;
+                viewport.pan.0 = cursor.x
+                    - rect.center().x
+                    - (cursor.x - rect.center().x - viewport.pan.0) * actual_factor;
+                viewport.pan.1 = cursor.y
+                    - rect.center().y
+                    - (cursor.y - rect.center().y - viewport.pan.1) * actual_factor;
                 viewport.zoom = new_zoom;
             }
 
@@ -266,7 +290,12 @@ impl CanvasView {
                         ui.add_space(rect.height() * 0.35);
                         ui.label(RichText::new("🖼").size(36.0).color(ThemeColors::TEXT_MUTED));
                         ui.add_space(6.0);
-                        ui.label(RichText::new("無影像資料").size(14.0).strong().color(ThemeColors::TEXT_PRIMARY));
+                        ui.label(
+                            RichText::new("無影像資料")
+                                .size(14.0)
+                                .strong()
+                                .color(ThemeColors::TEXT_PRIMARY),
+                        );
                     });
                 });
             });
@@ -284,12 +313,24 @@ impl CanvasView {
             );
 
             // 半透明暗色膠囊背景
-            painter.rect_filled(badge_rect, Rounding::same(12.0), Color32::from_black_alpha(190));
-            painter.rect_stroke(badge_rect, Rounding::same(12.0), Stroke::new(1.0, ThemeColors::BORDER));
-            painter.galley(pos2(badge_pos.x + 8.0, badge_pos.y + 4.0), galley, text_color);
+            painter.rect_filled(
+                badge_rect,
+                Rounding::same(12.0),
+                Color32::from_black_alpha(190),
+            );
+            painter.rect_stroke(
+                badge_rect,
+                Rounding::same(12.0),
+                Stroke::new(1.0, ThemeColors::BORDER),
+            );
+            painter.galley(
+                pos2(badge_pos.x + 8.0, badge_pos.y + 4.0),
+                galley,
+                text_color,
+            );
         }
 
-        response
+        (response, rendered_image_rect)
     }
 
     /// 繪製頂部懸浮比對工具列
@@ -300,14 +341,19 @@ impl CanvasView {
         action: &mut Option<ComparisonAction>,
     ) {
         let hud_size = vec2(480.0, 36.0);
-        let hud_rect = Rect::from_center_size(
-            pos2(rect.center().x, rect.top() + 26.0),
-            hud_size,
-        );
+        let hud_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 26.0), hud_size);
 
         // 懸浮膠囊框背景
-        ui.painter().rect_filled(hud_rect, Rounding::same(18.0), Color32::from_black_alpha(220));
-        ui.painter().rect_stroke(hud_rect, Rounding::same(18.0), Stroke::new(1.0, ThemeColors::BORDER));
+        ui.painter().rect_filled(
+            hud_rect,
+            Rounding::same(18.0),
+            Color32::from_black_alpha(220),
+        );
+        ui.painter().rect_stroke(
+            hud_rect,
+            Rounding::same(18.0),
+            Stroke::new(1.0, ThemeColors::BORDER),
+        );
 
         ui.allocate_new_ui(UiBuilder::new().max_rect(hud_rect), |ui| {
             ui.horizontal_centered(|ui| {
@@ -315,21 +361,23 @@ impl CanvasView {
 
                 // 來源切換按鈕
                 let is_orig = config.source == ComparisonSource::Original;
-                let orig_btn = egui::Button::new(
-                    RichText::new("📷 原圖比對")
-                        .size(12.0)
-                        .color(if is_orig { ThemeColors::ACCENT } else { ThemeColors::TEXT_SECONDARY }),
-                );
+                let orig_btn =
+                    egui::Button::new(RichText::new("📷 原圖比對").size(12.0).color(if is_orig {
+                        ThemeColors::ACCENT
+                    } else {
+                        ThemeColors::TEXT_SECONDARY
+                    }));
                 if ui.add(orig_btn).clicked() && !is_orig {
                     *action = Some(ComparisonAction::SetSource(ComparisonSource::Original));
                 }
 
                 let is_ref = config.source == ComparisonSource::Reference;
-                let ref_btn = egui::Button::new(
-                    RichText::new("📑 外部參考圖")
-                        .size(12.0)
-                        .color(if is_ref { ThemeColors::ACCENT } else { ThemeColors::TEXT_SECONDARY }),
-                );
+                let ref_btn =
+                    egui::Button::new(RichText::new("📑 外部參考圖").size(12.0).color(if is_ref {
+                        ThemeColors::ACCENT
+                    } else {
+                        ThemeColors::TEXT_SECONDARY
+                    }));
                 if ui.add(ref_btn).clicked() && !is_ref {
                     *action = Some(ComparisonAction::SetSource(ComparisonSource::Reference));
                 }
@@ -342,9 +390,13 @@ impl CanvasView {
 
                 // 同步平移縮放切換
                 let sync_text = if config.sync_viewport {
-                    RichText::new("🔗 視口已同步").size(12.0).color(ThemeColors::ACCENT)
+                    RichText::new("🔗 視口已同步")
+                        .size(12.0)
+                        .color(ThemeColors::ACCENT)
                 } else {
-                    RichText::new("⛓ 視口獨立").size(12.0).color(ThemeColors::TEXT_MUTED)
+                    RichText::new("⛓ 視口獨立")
+                        .size(12.0)
+                        .color(ThemeColors::TEXT_MUTED)
                 };
                 if ui.button(sync_text).clicked() {
                     *action = Some(ComparisonAction::ToggleSync);

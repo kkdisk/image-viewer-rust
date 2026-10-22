@@ -1,6 +1,6 @@
+use image::{ImageBuffer, Rgba};
 use std::fs::File;
 use std::io::Write;
-use image::{ImageBuffer, Rgba};
 use tempfile::tempdir;
 use zip::write::SimpleFileOptions;
 
@@ -30,8 +30,8 @@ fn test_app_archive_open_navigation_and_save_protection() {
     {
         let file = File::create(&zip_path).unwrap();
         let mut zip_writer = zip::ZipWriter::new(file);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         zip_writer.start_file("img_a.png", options).unwrap();
         zip_writer.write_all(&png1_bytes).unwrap();
@@ -45,6 +45,10 @@ fn test_app_archive_open_navigation_and_save_protection() {
     // 初始化 App
     let mut app = app_ui::app::ImageViewerApp::default();
     assert!(app.open_file_path(zip_path.clone()).is_ok());
+    assert!(
+        app.wait_archive_loaded(std::time::Duration::from_secs(5)),
+        "非同步解壓應在 5 秒內完成"
+    );
 
     // 驗證是否正確解壓與掛載
     assert!(app.archive_session.is_some());
@@ -55,8 +59,19 @@ fn test_app_archive_open_navigation_and_save_protection() {
     assert!(app.session.is_some());
     assert!(app.is_current_image_from_archive());
 
-    let current_path = app.session.as_ref().unwrap().source_path().unwrap().to_path_buf();
-    assert!(app.archive_session.as_ref().unwrap().is_from_archive(&current_path));
+    let current_path = app
+        .session
+        .as_ref()
+        .unwrap()
+        .source_path()
+        .unwrap()
+        .to_path_buf();
+    assert!(
+        app.archive_session
+            .as_ref()
+            .unwrap()
+            .is_from_archive(&current_path)
+    );
 
     // 導覽至下一張圖片
     app.navigate_next();
@@ -68,7 +83,10 @@ fn test_app_archive_open_navigation_and_save_protection() {
 
     // 模擬編輯
     app.slider_params.brightness = 1.8;
-    app.session.as_mut().unwrap().update_preview(app.slider_params);
+    app.session
+        .as_mut()
+        .unwrap()
+        .update_preview(app.slider_params);
     app.session.as_mut().unwrap().apply_adjustments();
 
     // 驗證安全防護：壓縮包圖片儲存至外部新檔案 (另存新檔)
@@ -78,7 +96,10 @@ fn test_app_archive_open_navigation_and_save_protection() {
 
     // 驗證原暫存檔與原始 ZIP 檔案絕對未被覆寫
     let current_bytes_len = std::fs::read(&current_path).unwrap().len();
-    assert_eq!(original_bytes_len, current_bytes_len, "原壓縮檔解壓之檔案絕對不能被直接原地變更！");
+    assert_eq!(
+        original_bytes_len, current_bytes_len,
+        "原壓縮檔解壓之檔案絕對不能被直接原地變更！"
+    );
 }
 
 #[test]
@@ -111,19 +132,31 @@ fn test_app_encrypted_7z_flow() {
     // 1. 初次無密碼開啟 -> 應觸發密碼輸入對話框
     let open_res = app.open_file_path(archive_path.clone());
     assert!(open_res.is_ok());
+    assert!(
+        app.wait_archive_loaded(std::time::Duration::from_secs(5)),
+        "背景掃描加密狀態完成"
+    );
     assert!(app.show_password_dialog, "加密壓縮檔應彈出密碼輸入視窗");
     assert_eq!(app.pending_archive_path.as_ref(), Some(&archive_path));
     assert!(app.archive_session.is_none());
 
     // 2. 模擬輸入錯誤密碼
     let wrong_res = app.open_archive_with_password(archive_path.clone(), "wrong_password");
-    assert!(wrong_res.is_err());
+    assert!(wrong_res.is_ok(), "非同步任務分發應成功");
+    assert!(
+        app.wait_archive_loaded(std::time::Duration::from_secs(5)),
+        "背景解密驗證完成"
+    );
     assert!(app.archive_password_error.is_some());
     assert!(app.show_password_dialog, "密碼錯誤時對話框應保持開啟");
 
     // 3. 模擬輸入正確密碼
     let correct_res = app.open_archive_with_password(archive_path, "my_top_secret");
-    assert!(correct_res.is_ok(), "正確密碼解鎖失敗: {:?}", correct_res.err());
+    assert!(correct_res.is_ok(), "非同步任務分發應成功");
+    assert!(
+        app.wait_archive_loaded(std::time::Duration::from_secs(5)),
+        "背景解密解壓完成"
+    );
     assert!(!app.show_password_dialog, "解鎖成功後密碼對話框應關閉");
     assert!(app.archive_session.is_some());
     assert_eq!(app.playlist.len(), 1);

@@ -1,9 +1,9 @@
 //! 壓縮檔密碼輸入對話框模組
 //! 當開啟帶有密碼保護之 7z 或 zip 壓縮包時，彈出對話框提示使用者輸入密碼進行解密
 
-use std::path::Path;
-use egui::{Color32, Margin, RichText, Rounding, Stroke, TextEdit, Window};
 use crate::theme::ThemeColors;
+use egui::{Color32, Margin, RichText, Rounding, Stroke, TextEdit, Window};
+use std::path::Path;
 
 /// 密碼對話框操作動作
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,18 +90,33 @@ impl<'a> ArchivePasswordDialog<'a> {
                             .desired_width(ui.available_width() - 32.0);
 
                         let res = ui.add(text_edit);
-                        if self.password_input.is_empty() && !res.has_focus() {
+
+                        // 首次開啟視窗時自動聚焦，避免後續持續搶焦點干擾點擊與 Tab
+                        let focus_key = egui::Id::new("archive_password_dialog_init_focus");
+                        let has_focused =
+                            ui.data(|d| d.get_temp::<bool>(focus_key)).unwrap_or(false);
+                        if !has_focused {
                             res.request_focus();
+                            ui.data_mut(|d| d.insert_temp(focus_key, true));
                         }
 
-                        // 按下 Enter 鍵直接觸發解鎖
-                        if res.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        // 按下 Enter 鍵直接觸發解鎖 (egui 單行輸入框按下 Enter 會同時 lost_focus)
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if (res.has_focus() || res.lost_focus()) && enter_pressed {
                             action = ArchivePasswordAction::Confirm(self.password_input.clone());
                         }
 
                         // 快速切換顯示/隱藏眼睛按鈕
-                        let eye_icon = if *self.show_password_char { "👁" } else { "🔒" };
-                        if ui.small_button(eye_icon).on_hover_text("切換顯示/隱藏密碼").clicked() {
+                        let eye_icon = if *self.show_password_char {
+                            "👁"
+                        } else {
+                            "🔒"
+                        };
+                        if ui
+                            .small_button(eye_icon)
+                            .on_hover_text("切換顯示/隱藏密碼")
+                            .clicked()
+                        {
                             *self.show_password_char = !*self.show_password_char;
                         }
                     });
@@ -147,9 +162,7 @@ impl<'a> ArchivePasswordDialog<'a> {
                             let confirm_btn = ui.add_sized(
                                 [90.0, 28.0],
                                 egui::Button::new(
-                                    RichText::new("解鎖確認")
-                                        .color(Color32::WHITE)
-                                        .strong(),
+                                    RichText::new("解鎖確認").color(Color32::WHITE).strong(),
                                 )
                                 .fill(ThemeColors::ACCENT)
                                 .rounding(Rounding::same(4.0)),
@@ -158,15 +171,15 @@ impl<'a> ArchivePasswordDialog<'a> {
                             let cancel_btn = ui.add_sized(
                                 [70.0, 28.0],
                                 egui::Button::new(
-                                    RichText::new("取消")
-                                        .color(Color32::from_rgb(200, 200, 200)),
+                                    RichText::new("取消").color(Color32::from_rgb(200, 200, 200)),
                                 )
                                 .fill(Color32::from_rgb(50, 50, 58))
                                 .rounding(Rounding::same(4.0)),
                             );
 
                             if confirm_btn.clicked() {
-                                action = ArchivePasswordAction::Confirm(self.password_input.clone());
+                                action =
+                                    ArchivePasswordAction::Confirm(self.password_input.clone());
                             } else if cancel_btn.clicked() {
                                 action = ArchivePasswordAction::Cancel;
                             }
@@ -177,6 +190,12 @@ impl<'a> ArchivePasswordDialog<'a> {
 
         if !open_flag {
             action = ArchivePasswordAction::Cancel;
+        }
+
+        if action != ArchivePasswordAction::None {
+            ctx.data_mut(|d| {
+                d.remove_temp::<bool>(egui::Id::new("archive_password_dialog_init_focus"))
+            });
         }
 
         *self.is_open = open_flag;

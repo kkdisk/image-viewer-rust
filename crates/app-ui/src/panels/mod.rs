@@ -1,5 +1,5 @@
-use egui::{menu, Color32, Margin, RichText, Rounding, SidePanel, Stroke, TopBottomPanel};
 use crate::theme::ThemeColors;
+use egui::{Color32, Margin, RichText, Rounding, SidePanel, Stroke, TopBottomPanel, menu};
 
 pub mod duplicate_dialog;
 pub use duplicate_dialog::{
@@ -8,6 +8,9 @@ pub use duplicate_dialog::{
 
 pub mod archive_dialog;
 pub use archive_dialog::{ArchivePasswordAction, ArchivePasswordDialog};
+
+pub mod histogram_view;
+pub use histogram_view::{HistogramMode, HistogramWidget};
 
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +34,7 @@ pub struct MenuBarState<'a> {
     pub show_filmstrip: &'a mut bool,
     pub is_side_by_side: &'a mut bool,
     pub sync_viewport: &'a mut bool,
+    pub magnifier_enabled: &'a mut bool,
 }
 
 /// 頂部主選單列
@@ -41,13 +45,18 @@ impl MenuBar {
         let mut triggered_action = None;
 
         TopBottomPanel::top("top_menu_bar")
-            .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::symmetric(10.0, 4.0)))
+            .frame(
+                egui::Frame::none()
+                    .fill(ThemeColors::BG_PANEL)
+                    .inner_margin(Margin::symmetric(10.0, 4.0)),
+            )
             .show(ctx, |ui| {
                 // 自訂頂部選單列專屬樣式：高對比清晰文字、平時透明底、平滑懸停底色
                 let menu_style = ui.style_mut();
                 menu_style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
                 menu_style.visuals.widgets.inactive.bg_stroke = Stroke::NONE;
-                menu_style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(235, 235, 242));
+                menu_style.visuals.widgets.inactive.fg_stroke =
+                    Stroke::new(1.0, Color32::from_rgb(235, 235, 242));
                 menu_style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 45, 52);
                 menu_style.visuals.widgets.hovered.bg_stroke = Stroke::NONE;
                 menu_style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
@@ -66,7 +75,10 @@ impl MenuBar {
                             triggered_action = Some(MenuAction::Save);
                             ui.close_menu();
                         }
-                        if ui.button("📝 另存新檔 (Save As)...  Ctrl+Shift+S").clicked() {
+                        if ui
+                            .button("📝 另存新檔 (Save As)...  Ctrl+Shift+S")
+                            .clicked()
+                        {
                             triggered_action = Some(MenuAction::SaveAs);
                             ui.close_menu();
                         }
@@ -77,13 +89,19 @@ impl MenuBar {
                     });
 
                     ui.menu_button("編輯 (Edit)", |ui| {
-                        let undo_btn = ui.add_enabled(state.can_undo, egui::Button::new("⮌ 復原 (Undo)    Ctrl+Z"));
+                        let undo_btn = ui.add_enabled(
+                            state.can_undo,
+                            egui::Button::new("⮌ 復原 (Undo)    Ctrl+Z"),
+                        );
                         if undo_btn.clicked() {
                             triggered_action = Some(MenuAction::Undo);
                             ui.close_menu();
                         }
 
-                        let redo_btn = ui.add_enabled(state.can_redo, egui::Button::new("⮎ 重做 (Redo)    Ctrl+Y"));
+                        let redo_btn = ui.add_enabled(
+                            state.can_redo,
+                            egui::Button::new("⮎ 重做 (Redo)    Ctrl+Y"),
+                        );
                         if redo_btn.clicked() {
                             triggered_action = Some(MenuAction::Redo);
                             ui.close_menu();
@@ -93,8 +111,12 @@ impl MenuBar {
                     ui.menu_button("檢視 (View)", |ui| {
                         ui.checkbox(state.show_side_panel, "側邊微調面板");
                         ui.checkbox(state.show_filmstrip, "底部縮圖列表 (Filmstrip)");
+                        ui.checkbox(state.magnifier_enabled, "🔎 局部放大鏡 (Magnifier)      M");
                         ui.separator();
-                        ui.checkbox(state.is_side_by_side, "🔀 雙圖分割比對 (Side-by-Side)  Ctrl+D");
+                        ui.checkbox(
+                            state.is_side_by_side,
+                            "🔀 雙圖分割比對 (Side-by-Side)  Ctrl+D",
+                        );
                         if *state.is_side_by_side {
                             ui.checkbox(state.sync_viewport, "  └ 🔗 同步平移與縮放");
                         }
@@ -110,7 +132,10 @@ impl MenuBar {
                     });
 
                     ui.menu_button("工具 (Tools)", |ui| {
-                        if ui.button("👥 重複圖片檢查器 (Duplicate Finder)...").clicked() {
+                        if ui
+                            .button("👥 重複圖片檢查器 (Duplicate Finder)...")
+                            .clicked()
+                        {
                             triggered_action = Some(MenuAction::DuplicateFinder);
                             ui.close_menu();
                         }
@@ -179,11 +204,42 @@ impl AboutDialog {
                 );
                 ui.add_space(6.0);
 
-                ui.label(RichText::new("• ⚡ 硬體加速：WGPU 與 egui 流暢 60+ FPS 縮放與平移畫布").size(12.0).color(ThemeColors::TEXT_SECONDARY));
-                ui.label(RichText::new("• 🧵 平行運算：Rayon 多執行緒微調（白平衡、曝光、對比、飽和度）").size(12.0).color(ThemeColors::TEXT_SECONDARY));
-                ui.label(RichText::new("• 🛡️ 安全防護：同目錄原子覆寫、EXIF 旋轉自動校正與 64M 像素保護").size(12.0).color(ThemeColors::TEXT_SECONDARY));
-                ui.label(RichText::new("• 🔀 非破壞式：多步 In-Memory 復原/重做與雙圖分割同步比對視圖").size(12.0).color(ThemeColors::TEXT_SECONDARY));
-                ui.label(RichText::new("• 👥 重複查重：多執行緒 pHash/DCT 感知雜湊與 Union-Find 自動分群").size(12.0).color(ThemeColors::TEXT_SECONDARY));
+                ui.label(
+                    RichText::new("• ⚡ 硬體加速：WGPU 與 egui 流暢 60+ FPS 縮放與平移畫布")
+                        .size(12.0)
+                        .color(ThemeColors::TEXT_SECONDARY),
+                );
+                ui.label(
+                    RichText::new(
+                        "• 🧵 平行運算：Rayon 多執行緒微調（白平衡、曝光、對比、飽和度）",
+                    )
+                    .size(12.0)
+                    .color(ThemeColors::TEXT_SECONDARY),
+                );
+                ui.label(
+                    RichText::new(
+                        "• 🛡️ 安全防護：同目錄原子覆寫、EXIF 旋轉自動校正與 64M 像素保護",
+                    )
+                    .size(12.0)
+                    .color(ThemeColors::TEXT_SECONDARY),
+                );
+                ui.label(
+                    RichText::new("• 🔀 非破壞式：多步 In-Memory 復原/重做與雙圖分割同步比對視圖")
+                        .size(12.0)
+                        .color(ThemeColors::TEXT_SECONDARY),
+                );
+                ui.label(
+                    RichText::new(
+                        "• 👥 重複查重：多執行緒 pHash/DCT 感知雜湊與 Union-Find 自動分群",
+                    )
+                    .size(12.0)
+                    .color(ThemeColors::TEXT_SECONDARY),
+                );
+                ui.label(
+                    RichText::new("• 🔍 局部探針：游標局部放大鏡 (M 鍵)、RGB/Luma 即時直方圖分析")
+                        .size(12.0)
+                        .color(ThemeColors::TEXT_SECONDARY),
+                );
 
                 ui.add_space(16.0);
                 ui.separator();
@@ -191,12 +247,16 @@ impl AboutDialog {
 
                 ui.vertical_centered(|ui| {
                     let close_btn = egui::Button::new(
-                        RichText::new("確定 (Close)").size(13.0).strong().color(Color32::WHITE),
+                        RichText::new("確定 (Close)")
+                            .size(13.0)
+                            .strong()
+                            .color(Color32::WHITE),
                     )
                     .fill(ThemeColors::ACCENT)
                     .min_size(egui::vec2(100.0, 28.0));
 
-                    if ui.add(close_btn).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    if ui.add(close_btn).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
                         *is_open = false;
                     }
                 });
@@ -218,7 +278,11 @@ impl StatusBar {
         status_msg: Option<&str>,
     ) {
         TopBottomPanel::bottom("bottom_status_bar")
-            .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::symmetric(12.0, 4.0)))
+            .frame(
+                egui::Frame::none()
+                    .fill(ThemeColors::BG_PANEL)
+                    .inner_margin(Margin::symmetric(12.0, 4.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     // 即時狀態或通知訊息
@@ -243,13 +307,25 @@ impl StatusBar {
 
                     // 檔案名稱
                     let name_str = filename.unwrap_or("未載入影像");
-                    ui.label(RichText::new(name_str).strong().color(ThemeColors::TEXT_PRIMARY));
+                    ui.label(
+                        RichText::new(name_str)
+                            .strong()
+                            .color(ThemeColors::TEXT_PRIMARY),
+                    );
 
                     // 存檔狀態標記
                     if is_dirty {
-                        ui.label(RichText::new("● 未存檔").color(ThemeColors::WARNING).size(11.0));
+                        ui.label(
+                            RichText::new("● 未存檔")
+                                .color(ThemeColors::WARNING)
+                                .size(11.0),
+                        );
                     } else if filename.is_some() {
-                        ui.label(RichText::new("● 已存檔").color(ThemeColors::SUCCESS).size(11.0));
+                        ui.label(
+                            RichText::new("● 已存檔")
+                                .color(ThemeColors::SUCCESS)
+                                .size(11.0),
+                        );
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -292,19 +368,26 @@ pub enum AdjustmentAction {
     Apply,
 }
 
+/// 側邊微調面板狀態與參數容器
+pub struct AdjustmentPanelState<'a> {
+    pub is_open: &'a mut bool,
+    pub has_image: bool,
+    pub params: &'a mut AdjustmentParams,
+    pub is_computing: bool,
+    pub histogram_data: Option<&'a core_image::HistogramData>,
+    pub histogram_mode: &'a mut HistogramMode,
+}
+
 /// 側邊微調面板容器
 pub struct AdjustmentPanel;
 
 impl AdjustmentPanel {
     pub fn show(
         ctx: &egui::Context,
-        is_open: &mut bool,
-        has_image: bool,
-        params: &mut AdjustmentParams,
-        is_computing: bool,
+        state: &mut AdjustmentPanelState<'_>,
         action: &mut Option<AdjustmentAction>,
     ) {
-        if !*is_open {
+        if !*state.is_open {
             return;
         }
 
@@ -313,18 +396,31 @@ impl AdjustmentPanel {
             .default_width(300.0)
             .min_width(240.0)
             .max_width(420.0)
-            .frame(egui::Frame::none().fill(ThemeColors::BG_PANEL).inner_margin(Margin::same(12.0)))
+            .frame(
+                egui::Frame::none()
+                    .fill(ThemeColors::BG_PANEL)
+                    .inner_margin(Margin::same(12.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🎨 影像微調").strong().size(15.0).color(ThemeColors::TEXT_PRIMARY));
+                    ui.label(
+                        RichText::new("🎨 影像微調")
+                            .strong()
+                            .size(15.0)
+                            .color(ThemeColors::TEXT_PRIMARY),
+                    );
 
-                    if is_computing {
-                        ui.label(RichText::new("⚡ 運算中...").size(11.0).color(ThemeColors::WARNING));
+                    if state.is_computing {
+                        ui.label(
+                            RichText::new("⚡ 運算中...")
+                                .size(11.0)
+                                .color(ThemeColors::WARNING),
+                        );
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("✖").clicked() {
-                            *is_open = false;
+                            *state.is_open = false;
                         }
                     });
                 });
@@ -332,70 +428,92 @@ impl AdjustmentPanel {
                 ui.separator();
                 ui.add_space(8.0);
 
-                if !has_image {
+                if !state.has_image {
                     ui.vertical_centered(|ui| {
                         ui.add_space(30.0);
-                        ui.label(RichText::new("尚未開啟圖片\n請先開啟一張圖片後方可進行微調").color(ThemeColors::TEXT_MUTED).size(13.0));
+                        ui.label(
+                            RichText::new(
+                                "尚未開啟圖片\n請先開啟一張圖片後方可進行微調與直方圖分析",
+                            )
+                            .color(ThemeColors::TEXT_MUTED)
+                            .size(13.0),
+                        );
                     });
                     return;
                 }
 
+                // 即時分佈直方圖
+                HistogramWidget::show(ui, state.histogram_data, state.histogram_mode);
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(8.0);
+
                 let mut changed = false;
 
                 // 1. 白平衡區塊
-                ui.collapsing(RichText::new("白平衡 (White Balance)").strong().color(ThemeColors::TEXT_PRIMARY), |ui| {
-                    ui.add_space(4.0);
-                    let s_temp = ui.add(
-                        egui::Slider::new(&mut params.temperature, -100..=100)
-                            .clamping(egui::SliderClamping::Always)
-                            .text("色溫 (K)"),
-                    );
-                    if s_temp.changed() {
-                        changed = true;
-                    }
+                ui.collapsing(
+                    RichText::new("白平衡 (White Balance)")
+                        .strong()
+                        .color(ThemeColors::TEXT_PRIMARY),
+                    |ui| {
+                        ui.add_space(4.0);
+                        let s_temp = ui.add(
+                            egui::Slider::new(&mut state.params.temperature, -100..=100)
+                                .clamping(egui::SliderClamping::Always)
+                                .text("色溫 (K)"),
+                        );
+                        if s_temp.changed() {
+                            changed = true;
+                        }
 
-                    let s_tint = ui.add(
-                        egui::Slider::new(&mut params.tint, -100..=100)
-                            .clamping(egui::SliderClamping::Always)
-                            .text("色調 (Tint)"),
-                    );
-                    if s_tint.changed() {
-                        changed = true;
-                    }
-                });
+                        let s_tint = ui.add(
+                            egui::Slider::new(&mut state.params.tint, -100..=100)
+                                .clamping(egui::SliderClamping::Always)
+                                .text("色調 (Tint)"),
+                        );
+                        if s_tint.changed() {
+                            changed = true;
+                        }
+                    },
+                );
 
                 ui.add_space(6.0);
 
                 // 2. 細部微調區塊
-                ui.collapsing(RichText::new("細部調整 (Fine Tune)").strong().color(ThemeColors::TEXT_PRIMARY), |ui| {
-                    ui.add_space(4.0);
-                    let s_bright = ui.add(
-                        egui::Slider::new(&mut params.brightness, 0.0..=2.0)
-                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                            .text("亮度 (Brightness)"),
-                    );
-                    if s_bright.changed() {
-                        changed = true;
-                    }
+                ui.collapsing(
+                    RichText::new("細部調整 (Fine Tune)")
+                        .strong()
+                        .color(ThemeColors::TEXT_PRIMARY),
+                    |ui| {
+                        ui.add_space(4.0);
+                        let s_bright = ui.add(
+                            egui::Slider::new(&mut state.params.brightness, 0.0..=2.0)
+                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                .text("亮度 (Brightness)"),
+                        );
+                        if s_bright.changed() {
+                            changed = true;
+                        }
 
-                    let s_contrast = ui.add(
-                        egui::Slider::new(&mut params.contrast, 0.0..=2.0)
-                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                            .text("對比度 (Contrast)"),
-                    );
-                    if s_contrast.changed() {
-                        changed = true;
-                    }
+                        let s_contrast = ui.add(
+                            egui::Slider::new(&mut state.params.contrast, 0.0..=2.0)
+                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                .text("對比度 (Contrast)"),
+                        );
+                        if s_contrast.changed() {
+                            changed = true;
+                        }
 
-                    let s_sat = ui.add(
-                        egui::Slider::new(&mut params.saturation, 0.0..=2.0)
-                            .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                            .text("飽和度 (Saturation)"),
-                    );
-                    if s_sat.changed() {
-                        changed = true;
-                    }
-                });
+                        let s_sat = ui.add(
+                            egui::Slider::new(&mut state.params.saturation, 0.0..=2.0)
+                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                .text("飽和度 (Saturation)"),
+                        );
+                        if s_sat.changed() {
+                            changed = true;
+                        }
+                    },
+                );
 
                 if changed {
                     *action = Some(AdjustmentAction::Change);
@@ -406,19 +524,27 @@ impl AdjustmentPanel {
                 ui.add_space(8.0);
 
                 // 3. 動作按鈕群
-                let is_dirty = !params.is_identity();
+                let is_dirty = !state.params.is_identity();
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(is_dirty, egui::Button::new("重設 (Reset)")).clicked() {
+                    if ui
+                        .add_enabled(is_dirty, egui::Button::new("重設 (Reset)"))
+                        .clicked()
+                    {
                         *action = Some(AdjustmentAction::Reset);
                     }
 
-                    if ui.add_enabled(is_dirty, egui::Button::new("取消 (Cancel)")).clicked() {
+                    if ui
+                        .add_enabled(is_dirty, egui::Button::new("取消 (Cancel)"))
+                        .clicked()
+                    {
                         *action = Some(AdjustmentAction::Cancel);
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let apply_btn = egui::Button::new(
-                            RichText::new("套用 (Apply)").strong().color(egui::Color32::WHITE),
+                            RichText::new("套用 (Apply)")
+                                .strong()
+                                .color(egui::Color32::WHITE),
                         )
                         .fill(ThemeColors::ACCENT);
 
@@ -431,9 +557,9 @@ impl AdjustmentPanel {
     }
 }
 
-use egui::{pos2, vec2, Align, Rect, ScrollArea};
 use crate::playlist::ImagePlaylist;
 use crate::thumbnail_loader::ThumbnailManager;
+use egui::{Align, Rect, ScrollArea, pos2, vec2};
 
 /// 底部 Filmstrip 縮圖列容器
 pub struct FilmstripPanel;
@@ -455,7 +581,11 @@ impl FilmstripPanel {
         TopBottomPanel::bottom("bottom_filmstrip_panel")
             .resizable(false)
             .exact_height(105.0)
-            .frame(egui::Frame::none().fill(ThemeColors::BG_APP).inner_margin(Margin::symmetric(10.0, 6.0)))
+            .frame(
+                egui::Frame::none()
+                    .fill(ThemeColors::BG_APP)
+                    .inner_margin(Margin::symmetric(10.0, 6.0)),
+            )
             .show(ctx, |ui| {
                 // 頂部小工具列
                 ui.horizontal(|ui| {
@@ -467,7 +597,11 @@ impl FilmstripPanel {
                         format!("🎞 縮圖列表 (共 {} 張)", playlist.len())
                     };
 
-                    ui.label(RichText::new(count_text).color(ThemeColors::TEXT_SECONDARY).size(12.0));
+                    ui.label(
+                        RichText::new(count_text)
+                            .color(ThemeColors::TEXT_SECONDARY)
+                            .size(12.0),
+                    );
 
                     if !playlist.is_empty() {
                         ui.add_space(8.0);
@@ -498,7 +632,8 @@ impl FilmstripPanel {
 
                             for (idx, path) in playlist.files().iter().enumerate() {
                                 let is_selected = curr_idx == Some(idx);
-                                let (rect, response) = ui.allocate_exact_size(card_size, egui::Sense::click());
+                                let (rect, response) =
+                                    ui.allocate_exact_size(card_size, egui::Sense::click());
 
                                 if is_selected {
                                     response.scroll_to_me(Some(Align::Center));
@@ -512,7 +647,8 @@ impl FilmstripPanel {
                                 } else {
                                     ThemeColors::BG_WIDGET
                                 };
-                                ui.painter().rect_filled(rect, Rounding::same(4.0), bg_color);
+                                ui.painter()
+                                    .rect_filled(rect, Rounding::same(4.0), bg_color);
 
                                 // 取得或請求縮圖：僅當可見或處於目前鄰近範圍內時優先向後台發起載入，其餘僅查快取
                                 let is_visible = ui.is_rect_visible(rect);
@@ -532,7 +668,10 @@ impl FilmstripPanel {
                                     let inner_margin = 4.0;
                                     let img_rect = Rect::from_min_max(
                                         pos2(rect.left() + inner_margin, rect.top() + inner_margin),
-                                        pos2(rect.right() - inner_margin, rect.bottom() - inner_margin),
+                                        pos2(
+                                            rect.right() - inner_margin,
+                                            rect.bottom() - inner_margin,
+                                        ),
                                     );
                                     ui.painter().image(
                                         tex.id(),
@@ -559,7 +698,8 @@ impl FilmstripPanel {
                                 } else {
                                     Stroke::new(1.0, ThemeColors::BORDER)
                                 };
-                                ui.painter().rect_stroke(rect, Rounding::same(4.0), border_stroke);
+                                ui.painter()
+                                    .rect_stroke(rect, Rounding::same(4.0), border_stroke);
 
                                 // 點擊卡片切換
                                 if response.clicked() {

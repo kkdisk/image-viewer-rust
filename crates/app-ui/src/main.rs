@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use app_ui::app::ImageViewerApp;
 use eframe::egui;
 

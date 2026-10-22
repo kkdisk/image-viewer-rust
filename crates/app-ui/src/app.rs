@@ -1,16 +1,18 @@
 //! eframe::App 主桌面應用邏輯
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use core_image::AdjustmentParams;
 use egui::{CentralPanel, ColorImage, Key, TextureHandle, TextureOptions};
+use std::path::PathBuf;
+use std::sync::Arc;
 use viewer_state::{EditingSession, ViewportState};
 
-use crate::canvas::{CanvasState, CanvasView, ComparisonAction, ComparisonConfig, ComparisonSource};
+use crate::canvas::{
+    CanvasState, CanvasView, ComparisonAction, ComparisonConfig, ComparisonSource,
+};
 use crate::debounce_queue::AdjustmentDebouncer;
 use crate::panels::{
-    AboutDialog, AdjustmentPanel, DuplicateFinderDialog, DuplicateFinderState, FilmstripPanel,
-    MenuBar, StatusBar,
+    AboutDialog, AdjustmentPanel, AdjustmentPanelState, DuplicateFinderDialog,
+    DuplicateFinderState, FilmstripPanel, MenuBar, StatusBar,
 };
 use crate::playlist::ImagePlaylist;
 use crate::theme::apply_theme;
@@ -66,8 +68,26 @@ pub struct ImageViewerApp {
     pub archive_show_password: bool,
     /// 是否顯示密碼輸入彈出視窗
     pub show_password_dialog: bool,
+    /// 壓縮檔非同步背景解壓縮排程器
+    pub archive_loader: crate::archive_loader::ArchiveLoader,
+    /// 最新發起之壓縮檔解壓請求 ID
+    pub latest_archive_req_id: u64,
+    /// 最後已由介面接收的背景請求，避免等待函式早於結果交付返回
+    received_archive_req_id: u64,
     /// 全域通知訊息與產生時間戳記 (訊息, 產生時間)
     pub status_notification: Option<(String, std::time::Instant)>,
+    /// 直方圖快取數據
+    pub cached_histogram: Option<core_image::HistogramData>,
+    /// 最近送往直方圖工作的影像，持有快照避免位址重用誤判
+    last_histogram_image: Option<Arc<image::RgbaImage>>,
+    histogram_loader: crate::histogram_loader::HistogramLoader,
+    histogram_pending: bool,
+    /// 直方圖顯示模式 (RGB 疊加、純 R、純 G、純 B、Luma)
+    pub histogram_mode: crate::panels::HistogramMode,
+    /// 是否啟用局部放大鏡 (快捷鍵 M)
+    pub magnifier_enabled: bool,
+    /// 局部放大鏡縮放倍率 (預設 4x，可切換 2x, 4x, 8x)
+    pub magnifier_zoom: u32,
 }
 
 impl Default for ImageViewerApp {
@@ -97,7 +117,17 @@ impl Default for ImageViewerApp {
             archive_password_error: None,
             archive_show_password: false,
             show_password_dialog: false,
+            archive_loader: crate::archive_loader::ArchiveLoader::new(),
+            latest_archive_req_id: 0,
+            received_archive_req_id: 0,
             status_notification: None,
+            cached_histogram: None,
+            last_histogram_image: None,
+            histogram_loader: crate::histogram_loader::HistogramLoader::default(),
+            histogram_pending: false,
+            histogram_mode: crate::panels::HistogramMode::default(),
+            magnifier_enabled: false,
+            magnifier_zoom: 4,
         }
     }
 }
@@ -112,6 +142,7 @@ impl ImageViewerApp {
 
     /// 開啟指定路徑之影像或壓縮檔（.zip / .7z）
     pub fn open_file_path(&mut self, path: PathBuf) -> Result<(), String> {
+        self.cancel_archive_loading();
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
@@ -119,39 +150,18 @@ impl ImageViewerApp {
             .unwrap_or_default();
 
         if ext == "zip" || ext == "7z" {
-            // 先嘗試無密碼解壓
-            match core_archive::ManagedArchiveSession::open_with_password(&path, None) {
-                Ok(session) => {
-                    let count = session.image_paths.len();
-                    self.apply_archive_session(session)?;
-                    self.pending_archive_path = None;
-                    self.show_password_dialog = false;
-                    self.archive_password_error = None;
-                    self.status_notification = Some((
-                        format!("已載入壓縮檔 (共 {} 張圖片)", count),
-                        std::time::Instant::now(),
-                    ));
-                    Ok(())
-                }
-                Err(core_archive::ArchiveError::PasswordRequired)
-                | Err(core_archive::ArchiveError::InvalidPassword) => {
-                    // 該壓縮檔受密碼保護，彈出密碼輸入彈窗
-                    self.pending_archive_path = Some(path);
-                    self.archive_password_input.clear();
-                    self.archive_password_error = None;
-                    self.show_password_dialog = true;
-                    self.status_notification = Some((
-                        "此壓縮檔受密碼保護，請輸入解鎖密碼".to_string(),
-                        std::time::Instant::now(),
-                    ));
-                    Ok(())
-                }
-                Err(e) => {
-                    let msg = format!("無法開啟壓縮檔: {}", e);
-                    self.status_notification = Some((msg.clone(), std::time::Instant::now()));
-                    Err(msg)
-                }
-            }
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("壓縮檔")
+                .to_string();
+            self.status_notification = Some((
+                format!("正在背景解壓縮 '{}'...", filename),
+                std::time::Instant::now(),
+            ));
+            // 分發至背景解壓工作池，UI 主執行緒立即返回，絕不凍結
+            self.latest_archive_req_id = self.archive_loader.load_archive(path, None);
+            Ok(())
         } else {
             // 若為一般圖片檔案
             let is_in_archive = self
@@ -169,50 +179,27 @@ impl ImageViewerApp {
         }
     }
 
-    /// 使用指定密碼解壓並開啟壓縮檔
+    /// 使用指定密碼在背景解壓並開啟壓縮檔
     pub fn open_archive_with_password(
         &mut self,
         path: PathBuf,
         password: &str,
     ) -> Result<(), String> {
-        // 先嘗試原始輸入密碼，若失敗且 trim 後內容不同，再嘗試 trim 後密碼
-        let mut res = core_archive::ManagedArchiveSession::open_with_password(&path, Some(password));
-        if res.is_err() && password.trim() != password {
-            let trimmed = password.trim();
-            if !trimmed.is_empty() {
-                res = core_archive::ManagedArchiveSession::open_with_password(&path, Some(trimmed));
-            }
-        }
-
-        match res {
-            Ok(session) => {
-                let count = session.image_paths.len();
-                if let Err(e) = self.apply_archive_session(session) {
-                    let msg = format!("解壓完成但載入首張圖片失敗: {}", e);
-                    self.archive_password_error = Some(msg.clone());
-                    return Err(msg);
-                }
-                self.pending_archive_path = None;
-                self.archive_password_input.clear();
-                self.archive_password_error = None;
-                self.show_password_dialog = false;
-                self.status_notification = Some((
-                    format!("解密成功！已載入 {} 張圖片", count),
-                    std::time::Instant::now(),
-                ));
-                Ok(())
-            }
-            Err(core_archive::ArchiveError::InvalidPassword)
-            | Err(core_archive::ArchiveError::PasswordRequired) => {
-                self.archive_password_error = Some("密碼錯誤或解密失敗，請檢查密碼".to_string());
-                Err("密碼錯誤".to_string())
-            }
-            Err(e) => {
-                let msg = format!("解壓失敗: {}", e);
-                self.archive_password_error = Some(msg.clone());
-                Err(msg)
-            }
-        }
+        self.cancel_archive_loading();
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("壓縮檔")
+            .to_string();
+        self.status_notification = Some((
+            format!("正在背景解密 '{}'...", filename),
+            std::time::Instant::now(),
+        ));
+        // 分發至背景執行緒解密
+        self.latest_archive_req_id = self
+            .archive_loader
+            .load_archive(path, Some(password.to_string()));
+        Ok(())
     }
 
     /// 套用已解壓完成之壓縮檔 Session 至播放清單與首張圖片檢視
@@ -235,15 +222,90 @@ impl ImageViewerApp {
         Ok(())
     }
 
+    /// 輪詢背景壓縮檔解壓結果並更新應用狀態（回傳是否有狀態變更）
+    pub fn poll_archive_loader(&mut self) -> bool {
+        if let Some(archive_res) = self.archive_loader.poll() {
+            self.received_archive_req_id = archive_res.request_id;
+            if archive_res.request_id != self.latest_archive_req_id {
+                return true;
+            }
+            match archive_res.result {
+                Ok(session) => {
+                    let count = session.image_paths.len();
+                    if let Err(e) = self.apply_archive_session(session) {
+                        self.status_notification = Some((
+                            format!("載入解壓圖片失敗: {}", e),
+                            std::time::Instant::now(),
+                        ));
+                    } else {
+                        self.pending_archive_path = None;
+                        self.show_password_dialog = false;
+                        self.archive_password_error = None;
+                        self.archive_password_input.clear();
+                        self.status_notification = Some((
+                            format!("已解壓載入壓縮檔 (共 {} 張圖片)", count),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
+                Err(core_archive::ArchiveError::PasswordRequired) => {
+                    self.pending_archive_path = Some(archive_res.path);
+                    self.show_password_dialog = true;
+                    self.archive_password_error = None;
+                    self.status_notification = Some((
+                        "此壓縮檔受密碼保護，請輸入解鎖密碼".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(core_archive::ArchiveError::InvalidPassword) => {
+                    self.pending_archive_path = Some(archive_res.path);
+                    self.show_password_dialog = true;
+                    self.archive_password_error =
+                        Some("密碼錯誤或解密失敗，請檢查密碼".to_string());
+                    self.status_notification = Some((
+                        "密碼錯誤，請重新輸入解鎖密碼".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    let msg = format!("無法開啟壓縮檔: {}", e);
+                    self.archive_password_error = Some(msg.clone());
+                    self.status_notification = Some((msg, std::time::Instant::now()));
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    /// 等候當前背景解壓完成（供測試或精確同步使用，最多等待 timeout）
+    pub fn wait_archive_loaded(&mut self, timeout: std::time::Duration) -> bool {
+        let target_id = self.latest_archive_req_id;
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            self.poll_archive_loader();
+            if self.received_archive_req_id >= target_id {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        false
+    }
+
     /// 開啟指定路徑之影像，並視情況維護播放清單
     pub fn open_image_path(&mut self, path: PathBuf) -> Result<(), core_image::ImageError> {
+        self.cancel_archive_loading();
         let dyn_img = core_image::load_image(&path)?;
         let rgba = dyn_img.to_rgba8();
 
         // 若不是清單內切換，則更新目錄掃描
         if !self.playlist.try_select_existing(&path) {
             let current_dir = path.parent();
-            let prev_dir = self.session.as_ref().and_then(|s| s.source_path()).and_then(|p| p.parent());
+            let prev_dir = self
+                .session
+                .as_ref()
+                .and_then(|s| s.source_path())
+                .and_then(|p| p.parent());
 
             if current_dir != prev_dir {
                 self.thumbnail_manager.clear();
@@ -263,12 +325,23 @@ impl ImageViewerApp {
         Ok(())
     }
 
+    /// 新開檔、導覽或取消時讓所有舊背景結果失效
+    pub fn cancel_archive_loading(&mut self) {
+        self.latest_archive_req_id = 0;
+        self.pending_archive_path = None;
+        self.show_password_dialog = false;
+        self.archive_password_input.clear();
+        self.archive_password_error = None;
+    }
+
     /// 彈出原生系統檔案選取對話框
     pub fn open_file_dialog(&mut self) {
         let file = rfd::FileDialog::new()
             .add_filter(
                 "支援的檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.zip, *.7z)",
-                &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif", "zip", "7z"],
+                &[
+                    "png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif", "zip", "7z",
+                ],
             )
             .add_filter(
                 "圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)",
@@ -288,7 +361,10 @@ impl ImageViewerApp {
     /// 開啟外部參考圖檔案對話框
     pub fn open_reference_image_dialog(&mut self) {
         let file = rfd::FileDialog::new()
-            .add_filter("圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)", &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"])
+            .add_filter(
+                "圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)",
+                &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"],
+            )
             .add_filter("所有檔案 (*.*)", &["*"])
             .pick_file();
 
@@ -344,11 +420,8 @@ impl ImageViewerApp {
                 let color_image = ColorImage::from_rgba_unmultiplied(size, active.as_raw());
 
                 // 採用雙線性過濾 LINEAR，確保縮放時平滑流暢
-                let handle = ctx.load_texture(
-                    "active_viewport_image",
-                    color_image,
-                    TextureOptions::LINEAR,
-                );
+                let handle =
+                    ctx.load_texture("active_viewport_image", color_image, TextureOptions::LINEAR);
                 self.texture = Some(handle);
                 self.last_texture_ptr = current_ptr;
             }
@@ -361,7 +434,8 @@ impl ImageViewerApp {
                         let orig_ptr = Arc::as_ptr(&orig) as usize;
                         if self.original_texture.is_none() || self.last_original_ptr != orig_ptr {
                             let size = [orig.width() as usize, orig.height() as usize];
-                            let color_image = ColorImage::from_rgba_unmultiplied(size, orig.as_raw());
+                            let color_image =
+                                ColorImage::from_rgba_unmultiplied(size, orig.as_raw());
                             let handle = ctx.load_texture(
                                 "original_viewport_image",
                                 color_image,
@@ -375,7 +449,8 @@ impl ImageViewerApp {
                         if let Some(ref_img) = &self.reference_image {
                             if self.reference_texture.is_none() {
                                 let size = [ref_img.width() as usize, ref_img.height() as usize];
-                                let color_image = ColorImage::from_rgba_unmultiplied(size, ref_img.as_raw());
+                                let color_image =
+                                    ColorImage::from_rgba_unmultiplied(size, ref_img.as_raw());
                                 let handle = ctx.load_texture(
                                     "reference_viewport_image",
                                     color_image,
@@ -394,6 +469,36 @@ impl ImageViewerApp {
             self.last_texture_ptr = 0;
             self.original_texture = None;
             self.last_original_ptr = 0;
+        }
+    }
+
+    /// 提交背景直方圖運算並接收符合目前影像的結果，不等待像素統計
+    pub fn sync_histogram(&mut self) {
+        if !self.show_side_panel {
+            return;
+        }
+        if let Some(sess) = &self.session {
+            let active = sess.active_image();
+            if !self
+                .last_histogram_image
+                .as_ref()
+                .is_some_and(|old| Arc::ptr_eq(old, &active))
+            {
+                self.histogram_loader.request(Arc::clone(&active));
+                self.last_histogram_image = Some(Arc::clone(&active));
+                self.histogram_pending = true;
+            }
+            while let Some(result) = self.histogram_loader.poll() {
+                if Arc::ptr_eq(&result.image, &active) {
+                    self.cached_histogram = Some(result.histogram);
+                    self.histogram_pending = false;
+                }
+            }
+        } else {
+            self.cached_histogram = None;
+            self.last_histogram_image = None;
+            self.histogram_pending = false;
+            while self.histogram_loader.poll().is_some() {}
         }
     }
 
@@ -571,6 +676,35 @@ impl ImageViewerApp {
                 self.viewport.zoom = (self.viewport.zoom / 1.2).clamp(0.02, 50.0);
                 self.viewport.auto_fit = false;
             }
+
+            // M / Shift + M: 局部放大鏡開關與倍率切換 (2x -> 4x -> 8x)
+            if !i.modifiers.command && i.key_pressed(Key::M) {
+                if i.modifiers.shift {
+                    self.magnifier_zoom = match self.magnifier_zoom {
+                        2 => 4,
+                        4 => 8,
+                        _ => 2,
+                    };
+                    self.status_notification = Some((
+                        format!("🔍 局部放大鏡倍率切換為 {}x", self.magnifier_zoom),
+                        std::time::Instant::now(),
+                    ));
+                } else {
+                    self.magnifier_enabled = !self.magnifier_enabled;
+                    if self.magnifier_enabled {
+                        self.status_notification = Some((
+                            format!(
+                                "🔍 局部放大鏡已開啟 ({}x，Shift+M 可切換倍率)",
+                                self.magnifier_zoom
+                            ),
+                            std::time::Instant::now(),
+                        ));
+                    } else {
+                        self.status_notification =
+                            Some(("🔍 局部放大鏡已關閉".to_string(), std::time::Instant::now()));
+                    }
+                }
+            }
         });
 
         if do_undo {
@@ -624,9 +758,7 @@ impl eframe::App for ImageViewerApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
         // 1. 處理全域檔案拖曳放入
-        let dropped_file = ctx.input(|i| {
-            i.raw.dropped_files.first().and_then(|d| d.path.clone())
-        });
+        let dropped_file = ctx.input(|i| i.raw.dropped_files.first().and_then(|d| d.path.clone()));
         if let Some(path) = dropped_file
             && let Err(e) = self.open_file_path(path)
         {
@@ -645,9 +777,18 @@ impl eframe::App for ImageViewerApp {
             }
         }
 
-        // 4. 接收背景縮圖結果並同步 GPU 主紋理
+        // 3.1 輪詢背景壓縮檔解壓結果 (非同步響應，UI 零卡頓)
+        if self.poll_archive_loader() {
+            ctx.request_repaint();
+        }
+
+        // 4. 接收背景縮圖結果並同步 GPU 主紋理與直方圖
         self.thumbnail_manager.poll_results(ctx);
         self.sync_texture(ctx);
+        self.sync_histogram();
+        if self.histogram_pending && self.show_side_panel {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
 
         // 5. 頂部選單列
         let can_undo = self.session.as_ref().map(|s| s.can_undo()).unwrap_or(false);
@@ -660,6 +801,7 @@ impl eframe::App for ImageViewerApp {
             show_filmstrip: &mut self.show_filmstrip,
             is_side_by_side: &mut self.comparison.is_active,
             sync_viewport: &mut self.comparison.sync_viewport,
+            magnifier_enabled: &mut self.magnifier_enabled,
         };
 
         if let Some(action) = MenuBar::show(ctx, &mut menu_state) {
@@ -674,7 +816,12 @@ impl eframe::App for ImageViewerApp {
                 crate::panels::MenuAction::Reset100 => self.viewport.reset_actual_size(),
                 crate::panels::MenuAction::ResetFit => self.viewport.reset_fit_window(),
                 crate::panels::MenuAction::DuplicateFinder => {
-                    let cur_dir = self.session.as_ref().and_then(|s| s.source_path()).and_then(|p| p.parent()).map(|p| p.to_path_buf());
+                    let cur_dir = self
+                        .session
+                        .as_ref()
+                        .and_then(|s| s.source_path())
+                        .and_then(|p| p.parent())
+                        .map(|p| p.to_path_buf());
                     self.duplicate_finder_state.open_with_dir(cur_dir);
                 }
                 crate::panels::MenuAction::About => self.show_about_dialog = true,
@@ -694,7 +841,10 @@ impl eframe::App for ImageViewerApp {
             None => (None, None, false),
         };
 
-        let playlist_info = self.playlist.current_index().map(|idx| (idx, self.playlist.len()));
+        let playlist_info = self
+            .playlist
+            .current_index()
+            .map(|idx| (idx, self.playlist.len()));
 
         let status_msg = if let Some((msg, ts)) = &self.status_notification {
             if ts.elapsed().as_secs() < 8 {
@@ -746,14 +896,16 @@ impl eframe::App for ImageViewerApp {
         let is_computing = self.debouncer.is_computing();
         let mut adjustment_action = None;
 
-        AdjustmentPanel::show(
-            ctx,
-            &mut self.show_side_panel,
+        let mut adj_state = AdjustmentPanelState {
+            is_open: &mut self.show_side_panel,
             has_image,
-            &mut self.slider_params,
+            params: &mut self.slider_params,
             is_computing,
-            &mut adjustment_action,
-        );
+            histogram_data: self.cached_histogram.as_ref(),
+            histogram_mode: &mut self.histogram_mode,
+        };
+
+        AdjustmentPanel::show(ctx, &mut adj_state, &mut adjustment_action);
 
         match adjustment_action {
             Some(crate::panels::AdjustmentAction::Change) => {
@@ -800,11 +952,15 @@ impl eframe::App for ImageViewerApp {
                         (self.original_texture.as_ref(), l_dims)
                     }
                     ComparisonSource::Reference => {
-                        let l_dims = self.reference_image.as_ref().map(|img| (img.width(), img.height()));
+                        let l_dims = self
+                            .reference_image
+                            .as_ref()
+                            .map(|img| (img.width(), img.height()));
                         (self.reference_texture.as_ref(), l_dims)
                     }
                 };
 
+                let active_img_ref = self.session.as_ref().map(|s| s.active_image());
                 let mut canvas_state = CanvasState {
                     texture: self.texture.as_ref(),
                     image_dims: dims,
@@ -813,6 +969,9 @@ impl eframe::App for ImageViewerApp {
                     left_dims,
                     left_viewport: &mut self.left_viewport,
                     comparison: &mut self.comparison,
+                    image_data: active_img_ref.as_deref(),
+                    magnifier_enabled: self.magnifier_enabled,
+                    magnifier_zoom: self.magnifier_zoom,
                 };
 
                 let mut comparison_action = None;
@@ -842,7 +1001,9 @@ impl eframe::App for ImageViewerApp {
         AboutDialog::show(ctx, &mut self.show_about_dialog);
 
         // 11. 重複圖片檢查器彈窗
-        if let Some(target_path) = DuplicateFinderDialog::show(ctx, &mut self.duplicate_finder_state) {
+        if let Some(target_path) =
+            DuplicateFinderDialog::show(ctx, &mut self.duplicate_finder_state)
+        {
             let _ = self.open_image_path(target_path);
         }
 
@@ -866,16 +1027,108 @@ impl eframe::App for ImageViewerApp {
                         let _ = self.open_archive_with_password(archive_path, &pwd);
                     }
                     crate::panels::ArchivePasswordAction::Cancel => {
-                        self.show_password_dialog = false;
-                        self.pending_archive_path = None;
-                        self.archive_password_input.clear();
-                        self.archive_password_error = None;
+                        self.cancel_archive_loading();
                     }
                     crate::panels::ArchivePasswordAction::None => {}
                 }
             } else {
                 self.show_password_dialog = false;
             }
+        }
+
+        // 13. 壓縮檔背景解壓中 HUD 提示視窗（方案 1：即時進度條與動態回饋）
+        if self.archive_loader.is_extracting()
+            || self.latest_archive_req_id > self.received_archive_req_id
+        {
+            let loading_name = self
+                .archive_loader
+                .loading_file_name()
+                .unwrap_or_else(|| "壓縮檔".to_string());
+
+            let progress_opt = self.archive_loader.current_progress();
+
+            egui::Window::new("📦 正在安全解壓縮")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .fixed_size(egui::vec2(380.0, 136.0))
+                .frame(
+                    egui::Frame::window(&ctx.style())
+                        .fill(egui::Color32::from_rgb(26, 26, 32))
+                        .stroke(egui::Stroke::new(1.5, crate::theme::ThemeColors::ACCENT))
+                        .rounding(egui::Rounding::same(8.0))
+                        .inner_margin(egui::Margin::same(16.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(format!("正在解壓 '{}'...", loading_name))
+                                    .color(egui::Color32::WHITE)
+                                    .strong(),
+                            );
+                        });
+
+                        ui.add_space(10.0);
+
+                        if let Some(prog) = progress_opt {
+                            if prog.total_entries > 0 {
+                                let ratio = (prog.current_entry_index as f32
+                                    / prog.total_entries as f32)
+                                    .clamp(0.0, 1.0);
+                                ui.add(
+                                    egui::ProgressBar::new(ratio)
+                                        .show_percentage()
+                                        .animate(true)
+                                        .text(format!(
+                                            "{}/{} 檔案",
+                                            prog.current_entry_index, prog.total_entries
+                                        )),
+                                );
+                            } else {
+                                ui.add(
+                                    egui::ProgressBar::new(1.0)
+                                        .animate(true)
+                                        .text("分析與解壓串流中..."),
+                                );
+                            }
+
+                            if !prog.current_entry.is_empty() {
+                                ui.add_space(6.0);
+                                let char_count = prog.current_entry.chars().count();
+                                let entry_display = if char_count > 32 {
+                                    let skip_count = char_count.saturating_sub(30);
+                                    let suffix: String =
+                                        prog.current_entry.chars().skip(skip_count).collect();
+                                    format!("...{}", suffix)
+                                } else {
+                                    prog.current_entry.clone()
+                                };
+                                ui.label(
+                                    egui::RichText::new(format!("檔案: {}", entry_display))
+                                        .color(egui::Color32::LIGHT_GRAY)
+                                        .size(11.5),
+                                );
+                            }
+                        } else {
+                            ui.add(
+                                egui::ProgressBar::new(1.0)
+                                    .animate(true)
+                                    .text("準備解壓縮引擎..."),
+                            );
+                        }
+
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("已移至背景非同步執行，UI 保持流暢絕不凍結")
+                                .color(crate::theme::ThemeColors::TEXT_MUTED)
+                                .size(11.5),
+                        );
+                    });
+                });
+            ctx.request_repaint();
         }
     }
 }
