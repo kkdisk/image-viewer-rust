@@ -9,3 +9,5 @@ pub use archive::{
     natural_cmp, sanitize_archive_path,
 };
 pub use error::ArchiveError;
+
+pub mod recycle;

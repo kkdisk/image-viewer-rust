@@ -5,6 +5,7 @@
 pub mod display_preview;
 pub mod error;
 pub mod exif;
+pub mod geometry;
 pub mod io;
 pub mod ops;
 

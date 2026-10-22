@@ -180,7 +180,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app-ui"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "core-archive",
@@ -838,7 +838,7 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
 name = "core-archive"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "crc32fast",
  "image",
@@ -846,6 +846,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "trash",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
  "zip",
 ]
 
@@ -891,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "core-image"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "image",
  "kamadak-exif",
@@ -1075,7 +1077,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "duplicate-finder"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "core-image",
  "image",
@@ -3843,7 +3845,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "viewer-state"
-version = "0.5.0"
+version = "0.5.2"
 dependencies = [
  "core-image",
  "image",
