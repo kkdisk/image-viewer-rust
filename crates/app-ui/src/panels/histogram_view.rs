@@ -23,36 +23,61 @@ impl HistogramWidget {
     pub fn show(ui: &mut Ui, data: Option<&HistogramData>, mode: &mut HistogramMode) -> Response {
         ui.vertical(|ui| {
             // 頂部通道切換按鈕列
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("📊 分布直方圖")
-                        .strong()
-                        .size(13.0)
-                        .color(ThemeColors::TEXT_PRIMARY),
-                );
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let btn_luma = ui.selectable_label(*mode == HistogramMode::Luma, "亮度");
-                    if btn_luma.clicked() {
-                        *mode = HistogramMode::Luma;
+            ui.label(
+                RichText::new("📊 分布直方圖")
+                    .strong()
+                    .size(13.0)
+                    .color(ThemeColors::TEXT_PRIMARY),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for (candidate, label, color, hint) in [
+                    (
+                        HistogramMode::Rgb,
+                        "RGB",
+                        ThemeColors::TEXT_PRIMARY,
+                        "紅、綠、藍通道疊加",
+                    ),
+                    (
+                        HistogramMode::Red,
+                        "紅",
+                        Color32::from_rgb(255, 140, 140),
+                        "紅色通道 R",
+                    ),
+                    (
+                        HistogramMode::Green,
+                        "綠",
+                        Color32::from_rgb(120, 230, 150),
+                        "綠色通道 G",
+                    ),
+                    (
+                        HistogramMode::Blue,
+                        "藍",
+                        Color32::from_rgb(145, 185, 255),
+                        "藍色通道 B",
+                    ),
+                    (
+                        HistogramMode::Luma,
+                        "亮度",
+                        ThemeColors::TEXT_PRIMARY,
+                        "感知亮度分布",
+                    ),
+                ] {
+                    let color = if *mode == candidate {
+                        Color32::WHITE
+                    } else {
+                        color
+                    };
+                    if ui
+                        .selectable_label(
+                            *mode == candidate,
+                            RichText::new(label).strong().color(color),
+                        )
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        *mode = candidate;
                     }
-                    let btn_b = ui.selectable_label(*mode == HistogramMode::Blue, "B");
-                    if btn_b.clicked() {
-                        *mode = HistogramMode::Blue;
-                    }
-                    let btn_g = ui.selectable_label(*mode == HistogramMode::Green, "G");
-                    if btn_g.clicked() {
-                        *mode = HistogramMode::Green;
-                    }
-                    let btn_r = ui.selectable_label(*mode == HistogramMode::Red, "R");
-                    if btn_r.clicked() {
-                        *mode = HistogramMode::Red;
-                    }
-                    let btn_rgb = ui.selectable_label(*mode == HistogramMode::Rgb, "RGB");
-                    if btn_rgb.clicked() {
-                        *mode = HistogramMode::Rgb;
-                    }
-                });
+                }
             });
 
             ui.add_space(4.0);

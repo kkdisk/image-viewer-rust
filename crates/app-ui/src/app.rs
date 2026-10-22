@@ -145,6 +145,9 @@ impl Default for ImageViewerApp {
 }
 
 impl ImageViewerApp {
+    pub(crate) fn is_preview_pending(&self) -> bool {
+        self.pending_adjustment.is_some()
+    }
     /// 建立應用實例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // 套用自訂現代暗色主題與微軟正黑體字型
@@ -701,7 +704,7 @@ impl ImageViewerApp {
 
     /// 處理鍵盤快捷鍵
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.has_pending_leave() {
+        if self.has_pending_leave() || ctx.wants_keyboard_input() {
             return;
         }
         let mut do_prev = false;
@@ -761,18 +764,16 @@ impl ImageViewerApp {
 
             // 視口縮放快捷鍵
             if i.key_pressed(Key::Num0) || i.key_pressed(Key::F) {
-                self.viewport.reset_fit_window();
+                self.apply_zoom_action(crate::panels::ZoomAction::Fit);
             }
             if i.key_pressed(Key::Num1) {
-                self.viewport.reset_actual_size();
+                self.apply_zoom_action(crate::panels::ZoomAction::Actual);
             }
             if i.key_pressed(Key::Equals) || i.key_pressed(Key::Plus) {
-                self.viewport.zoom = (self.viewport.zoom * 1.2).clamp(0.02, 50.0);
-                self.viewport.auto_fit = false;
+                self.apply_zoom_action(crate::panels::ZoomAction::In);
             }
             if i.key_pressed(Key::Minus) {
-                self.viewport.zoom = (self.viewport.zoom / 1.2).clamp(0.02, 50.0);
-                self.viewport.auto_fit = false;
+                self.apply_zoom_action(crate::panels::ZoomAction::Out);
             }
 
             // M / Shift + M: 局部放大鏡開關與倍率切換 (2x -> 4x -> 8x)
@@ -863,7 +864,14 @@ impl eframe::App for ImageViewerApp {
                     .and_then(|n| n.to_str())
                     .unwrap_or("未命名圖片");
                 let dirty_mark = if sess.is_dirty() { " *" } else { "" };
-                format!("{} - 圖片檢視器{}", name, dirty_mark)
+                let preview_mark = match self.document_status() {
+                    crate::panels::DocumentStatus::Preview {
+                        computing: true, ..
+                    } => " · 預覽運算中",
+                    crate::panels::DocumentStatus::Preview { .. } => " · 預覽未套用",
+                    _ => "",
+                };
+                format!("{} - 圖片檢視器{}{}", name, dirty_mark, preview_mark)
             }
             None => "純 Rust 高效能圖片瀏覽器".to_string(),
         };
@@ -957,16 +965,16 @@ impl eframe::App for ImageViewerApp {
         }
 
         // 6. 底部狀態列
-        let (filename, dimensions, is_dirty) = match &self.session {
+        let (filename, dimensions) = match &self.session {
             Some(sess) => {
                 let name = sess
                     .source_path()
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str());
                 let dims = (sess.active_image().width(), sess.active_image().height());
-                (name, Some(dims), sess.is_dirty())
+                (name, Some(dims))
             }
-            None => (None, None, false),
+            None => (None, None),
         };
 
         let playlist_info = self
@@ -986,15 +994,20 @@ impl eframe::App for ImageViewerApp {
             None
         };
 
-        StatusBar::show(
+        let zoom_action = StatusBar::show(
             ctx,
-            filename,
-            dimensions,
-            self.viewport.zoom,
-            is_dirty,
-            playlist_info,
-            status_msg,
+            &crate::panels::StatusBarState {
+                filename,
+                dimensions,
+                zoom: self.viewport.zoom,
+                document: self.document_status(),
+                playlist_info,
+                notification: status_msg,
+            },
         );
+        if let Some(action) = zoom_action {
+            self.apply_zoom_action(action);
+        }
 
         // 7. 底部 Filmstrip 縮圖列
         let mut nav_to_idx = None;
@@ -1028,7 +1041,7 @@ impl eframe::App for ImageViewerApp {
 
         // 8. 側邊微調面板
         let has_image = self.session.is_some();
-        let is_computing = self.pending_adjustment.is_some() || self.debouncer.is_computing();
+        let is_computing = self.is_preview_pending();
         let mut adjustment_action = None;
 
         let mut adj_state = AdjustmentPanelState {
@@ -1274,5 +1287,64 @@ impl eframe::App for ImageViewerApp {
         }
         self.show_leave_dialog(ctx);
         self.update_preferences(ctx);
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn queued_preview_is_reported_as_computing_without_marking_the_base_dirty() {
+        let app = ImageViewerApp {
+            session: Some(EditingSession::new(image::RgbaImage::new(1, 1), None)),
+            pending_adjustment: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            app.document_status(),
+            crate::panels::DocumentStatus::Preview {
+                committed_dirty: false,
+                computing: true
+            }
+        );
+    }
+
+    #[test]
+    fn editing_a_number_does_not_trigger_zoom_or_navigation_shortcuts() {
+        let mut app = ImageViewerApp {
+            session: Some(EditingSession::new(image::RgbaImage::new(1, 1), None)),
+            ..Default::default()
+        };
+        app.playlist
+            .set_custom_list(vec!["a.png".into(), "b.png".into()]);
+        app.viewport.zoom = 0.5;
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+            });
+        });
+        let events = [Key::Num1, Key::ArrowRight]
+            .into_iter()
+            .map(|key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            })
+            .collect();
+        let _ = ctx.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| app.handle_shortcuts(ctx),
+        );
+        assert_eq!(app.viewport.zoom, 0.5);
+        assert!(!app.is_loading_image());
+        assert_eq!(app.playlist.current_index(), Some(0));
     }
 }

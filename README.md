@@ -25,6 +25,8 @@
 
 偏好設定預設存於 `%APPDATA%/rust_image_viewer/config.json`，使用 `app-ui.exe --portable` 時改存於執行檔旁。設定包含視窗大小與最大化、面板、直方圖、放大鏡及微調區塊開關，採背景原子寫入。損毀或不支援的設定版本會保留原檔，該次啟動使用預設值並停止寫入設定。
 
+狀態列分別顯示目前預覽與底圖的儲存狀態。預覽必須先「套用」，才能以 `Ctrl+S` 儲存。可拖曳或輸入縮放百分比，使用 `＋`／`−` 調整倍率、`1` 切回原始尺寸、`F` 或 `0` 符合視窗；輸入數字時暫停切圖與縮放快捷鍵。微調面板可垂直捲動，底部保留套用與取消操作。
+
 Windows 自動檢查與標籤建置流程見 [Windows 建置與驗收](docs/WINDOWS_BUILD.md)。
 
 詳細規格請參閱 [docs/SPEC_RUST_IMAGE_VIEWER.md](docs/SPEC_RUST_IMAGE_VIEWER.md)。

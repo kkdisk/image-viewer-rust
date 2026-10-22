@@ -270,98 +270,8 @@ impl AboutDialog {
     }
 }
 
-/// 底部狀態列
-pub struct StatusBar;
-
-impl StatusBar {
-    pub fn show(
-        ctx: &egui::Context,
-        filename: Option<&str>,
-        dimensions: Option<(u32, u32)>,
-        zoom_pct: f32,
-        is_dirty: bool,
-        playlist_info: Option<(usize, usize)>,
-        status_msg: Option<&str>,
-    ) {
-        TopBottomPanel::bottom("bottom_status_bar")
-            .frame(
-                egui::Frame::none()
-                    .fill(ThemeColors::BG_PANEL)
-                    .inner_margin(Margin::symmetric(12.0, 4.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    // 即時狀態或通知訊息
-                    if let Some(msg) = status_msg {
-                        ui.label(
-                            RichText::new(format!("📢 {}", msg))
-                                .strong()
-                                .color(ThemeColors::ACCENT_HOVER),
-                        );
-                        ui.separator();
-                    }
-
-                    // 檔案清單進度序號
-                    if let Some((curr, total)) = playlist_info {
-                        ui.label(
-                            RichText::new(format!("[ {} / {} ]", curr + 1, total))
-                                .strong()
-                                .color(ThemeColors::ACCENT),
-                        );
-                        ui.separator();
-                    }
-
-                    // 檔案名稱
-                    let name_str = filename.unwrap_or("未載入影像");
-                    ui.label(
-                        RichText::new(name_str)
-                            .strong()
-                            .color(ThemeColors::TEXT_PRIMARY),
-                    );
-
-                    // 存檔狀態標記
-                    if is_dirty {
-                        ui.label(
-                            RichText::new("● 未存檔")
-                                .color(ThemeColors::WARNING)
-                                .size(11.0),
-                        );
-                    } else if filename.is_some() {
-                        ui.label(
-                            RichText::new("● 已存檔")
-                                .color(ThemeColors::SUCCESS)
-                                .size(11.0),
-                        );
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // 縮放百分比
-                        ui.label(
-                            RichText::new(format!("{:.0}%", zoom_pct * 100.0))
-                                .color(ThemeColors::TEXT_SECONDARY),
-                        );
-                        ui.separator();
-
-                        // 影像解析度尺寸
-                        if let Some((w, h)) = dimensions {
-                            ui.label(
-                                RichText::new(format!("{w} × {h} px"))
-                                    .color(ThemeColors::TEXT_SECONDARY),
-                            );
-                            ui.separator();
-                        }
-
-                        // 渲染模式標記
-                        ui.label(
-                            RichText::new("WGPU 硬體加速")
-                                .size(11.0)
-                                .color(ThemeColors::TEXT_MUTED),
-                        );
-                    });
-                });
-            });
-    }
-}
+pub mod status_bar;
+pub use status_bar::{DocumentStatus, StatusBar, StatusBarState, ZoomAction};
 
 use core_image::AdjustmentParams;
 
@@ -453,9 +363,11 @@ impl AdjustmentPanel {
                 let mut changed = false;
                 egui::ScrollArea::vertical()
                     .id_salt("adjustment_controls_scroll")
-                    .max_height((ui.available_height() - 72.0).max(0.0))
+                    .max_height((ui.available_height() - 86.0).max(0.0))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.spacing_mut().slider_width =
+                            (ui.available_width() - 104.0).clamp(60.0, 180.0);
                         // 即時分佈直方圖
                         HistogramWidget::show(ui, state.histogram_data, state.histogram_mode);
                         ui.add_space(8.0);
@@ -464,7 +376,7 @@ impl AdjustmentPanel {
 
                         // 1. 白平衡區塊
                         let white_balance = egui::CollapsingHeader::new(
-                            RichText::new("白平衡 (White Balance)")
+                            RichText::new("白平衡")
                                 .strong()
                                 .color(ThemeColors::TEXT_PRIMARY),
                         )
@@ -475,7 +387,7 @@ impl AdjustmentPanel {
                             let s_temp = ui.add(
                                 egui::Slider::new(&mut state.params.temperature, -100..=100)
                                     .clamping(egui::SliderClamping::Always)
-                                    .text("色溫 (K)"),
+                                    .text("色溫"),
                             );
                             if s_temp.changed() {
                                 changed = true;
@@ -484,7 +396,7 @@ impl AdjustmentPanel {
                             let s_tint = ui.add(
                                 egui::Slider::new(&mut state.params.tint, -100..=100)
                                     .clamping(egui::SliderClamping::Always)
-                                    .text("色調 (Tint)"),
+                                    .text("色調"),
                             );
                             if s_tint.changed() {
                                 changed = true;
@@ -498,7 +410,7 @@ impl AdjustmentPanel {
 
                         // 2. 細部微調區塊
                         let fine_tune = egui::CollapsingHeader::new(
-                            RichText::new("細部調整 (Fine Tune)")
+                            RichText::new("細部調整")
                                 .strong()
                                 .color(ThemeColors::TEXT_PRIMARY),
                         )
@@ -509,7 +421,7 @@ impl AdjustmentPanel {
                             let s_bright = ui.add(
                                 egui::Slider::new(&mut state.params.brightness, 0.0..=2.0)
                                     .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                    .text("亮度 (Brightness)"),
+                                    .text("亮度"),
                             );
                             if s_bright.changed() {
                                 changed = true;
@@ -518,7 +430,7 @@ impl AdjustmentPanel {
                             let s_contrast = ui.add(
                                 egui::Slider::new(&mut state.params.contrast, 0.0..=2.0)
                                     .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                    .text("對比度 (Contrast)"),
+                                    .text("對比"),
                             );
                             if s_contrast.changed() {
                                 changed = true;
@@ -527,7 +439,7 @@ impl AdjustmentPanel {
                             let s_sat = ui.add(
                                 egui::Slider::new(&mut state.params.saturation, 0.0..=2.0)
                                     .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                    .text("飽和度 (Saturation)"),
+                                    .text("飽和度"),
                             );
                             if s_sat.changed() {
                                 changed = true;
@@ -542,22 +454,35 @@ impl AdjustmentPanel {
                     *action = Some(AdjustmentAction::Change);
                 }
 
-                ui.add_space(16.0);
+                ui.add_space(6.0);
                 ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
                 // 3. 動作按鈕群
                 let is_dirty = !state.params.is_identity();
+                ui.label(
+                    RichText::new(if state.is_computing {
+                        "預覽運算中，完成後即可套用"
+                    } else if is_dirty {
+                        "預覽尚未套用；套用後才可儲存"
+                    } else {
+                        "調整滑桿後可預覽效果"
+                    })
+                    .size(11.0)
+                    .color(ThemeColors::TEXT_SECONDARY),
+                );
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(is_dirty, egui::Button::new("重設 (Reset)"))
+                        .add_enabled(is_dirty, egui::Button::new("重設"))
+                        .on_hover_text("將預覽參數恢復為預設值")
                         .clicked()
                     {
                         *action = Some(AdjustmentAction::Reset);
                     }
 
                     if ui
-                        .add_enabled(is_dirty, egui::Button::new("取消 (Cancel)"))
+                        .add_enabled(is_dirty, egui::Button::new("取消"))
+                        .on_hover_text("移除預覽，保留已套用的編輯")
                         .clicked()
                     {
                         *action = Some(AdjustmentAction::Cancel);
@@ -565,14 +490,13 @@ impl AdjustmentPanel {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let apply_btn = egui::Button::new(
-                            RichText::new("套用 (Apply)")
-                                .strong()
-                                .color(egui::Color32::WHITE),
+                            RichText::new("套用").strong().color(egui::Color32::WHITE),
                         )
                         .fill(ThemeColors::ACCENT);
 
                         if ui
                             .add_enabled(is_dirty && !state.is_computing, apply_btn)
+                            .on_hover_text("將目前預覽加入編輯歷史，再使用 Ctrl+S 儲存")
                             .clicked()
                         {
                             *action = Some(AdjustmentAction::Apply);
