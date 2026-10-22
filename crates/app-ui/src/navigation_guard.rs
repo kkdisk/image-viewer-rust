@@ -5,6 +5,8 @@ use core_archive::ManagedArchiveSession;
 use std::path::PathBuf;
 
 pub(crate) enum LeaveAction {
+    Refresh,
+    Delete,
     Image(PathBuf),
     ArchivePath(PathBuf),
     Archive(ManagedArchiveSession),
@@ -43,19 +45,23 @@ impl ImageViewerApp {
                     });
                 }
             });
+        if self.file_actions.confirming_delete {
+            self.show_delete_dialog(ctx);
+            return;
+        }
         if self.animation_save.is_some() {
             self.show_animation_save_dialog(ctx);
             return;
         }
         self.show_leave_dialog(ctx);
-        if self.is_saving() {
-            egui::Window::new("正在儲存圖片")
+        if self.is_document_busy() {
+            egui::Window::new("正在處理圖片")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 110.0))
                 .show(ctx, |ui| {
                     ui.spinner();
-                    ui.label("完成原子寫入後才繼續操作，請稍候…");
+                    ui.label("背景操作完成後才繼續，請稍候…");
                 });
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
@@ -84,10 +90,13 @@ impl ImageViewerApp {
     }
 
     pub fn request_close(&mut self) -> bool {
+        if self.is_transforming() || self.is_recycling() || self.file_actions.confirming_delete {
+            return false;
+        }
         if self.leave_guard.close_confirmed {
             return true;
         }
-        if self.is_saving() {
+        if self.is_document_busy() {
             if self.leave_guard.action.is_none() {
                 self.leave_guard.action = Some(LeaveAction::Close);
             }
@@ -108,7 +117,7 @@ impl ImageViewerApp {
             self.leave_guard.save_then_leave = false;
             return Ok(false);
         }
-        if self.is_saving() {
+        if self.is_document_busy() {
             return Err("儲存進行中，請稍候或取消離開".into());
         }
         if matches!(choice, LeaveChoice::Save) {
@@ -139,6 +148,14 @@ impl ImageViewerApp {
         };
         self.leave_guard.error = None;
         let result = match action {
+            LeaveAction::Refresh => {
+                self.start_refresh(true);
+                Ok(())
+            }
+            LeaveAction::Delete => {
+                self.begin_delete_confirmation();
+                Ok(())
+            }
             LeaveAction::ArchivePath(path) => {
                 self.start_archive_path(path);
                 Ok(())

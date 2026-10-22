@@ -41,26 +41,46 @@ impl ImageViewerApp {
     pub(crate) fn show_animation_save_dialog(&mut self, ctx: &egui::Context) {
         let mut choice = None;
         let mut open = true;
-        egui::Window::new("動畫檔儲存警告")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
+        egui::Window::new(if self.animated_source {
+            "動畫檔儲存警告"
+        } else {
+            "JPEG 儲存警告"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            if self.animated_source {
                 ui.label("此操作會變成靜態圖，僅保留目前畫面的第一格編輯結果。");
                 ui.label("原有動畫影格將不會保留於輸出檔案。");
-                if let Some(request) = &self.animation_save {
-                    ui.label(request.path.display().to_string());
+            }
+            if self.animation_save.as_ref().is_some_and(|request| {
+                request.path.extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg")
+                })
+            }) {
+                ui.label("JPEG 儲存會重新壓縮，可能降低畫質。");
+            }
+            if let Some(request) = &self.animation_save {
+                ui.label(request.path.display().to_string());
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .button(if self.animated_source {
+                        "確認儲存靜態圖"
+                    } else {
+                        "確認重新壓縮"
+                    })
+                    .clicked()
+                {
+                    choice = Some(true);
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("確認儲存靜態圖").clicked() {
-                        choice = Some(true);
-                    }
-                    if ui.button("取消").clicked() {
-                        choice = Some(false);
-                    }
-                });
+                if ui.button("取消").clicked() {
+                    choice = Some(false);
+                }
             });
+        });
         if !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             choice = Some(false);
         }

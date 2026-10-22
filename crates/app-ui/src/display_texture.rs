@@ -1,5 +1,6 @@
 //! 顯示紋理背景轉換；只保留最新等待快照，交付時再次核對影像及裝置上限。
 
+use crate::preferences::SamplingMode;
 use image::RgbaImage;
 use std::sync::{Arc, Mutex, mpsc};
 
@@ -7,6 +8,17 @@ use std::sync::{Arc, Mutex, mpsc};
 struct DisplayKey {
     crop: [u32; 4],
     limit: u32,
+    sampling: SamplingMode,
+    target: Option<[u32; 2]>,
+}
+#[derive(Clone, Copy, PartialEq)]
+struct ViewSignature {
+    zoom: f32,
+    pan: (f32, f32),
+    auto_fit: bool,
+    rect: egui::Rect,
+    density: f32,
+    sampling: SamplingMode,
 }
 type Request = (Arc<RgbaImage>, DisplayKey);
 struct ResultImage {
@@ -21,6 +33,9 @@ pub(crate) struct DisplayTexture {
     results: mpsc::Receiver<ResultImage>,
     requested: Option<Request>,
     ready: bool,
+    sampling: SamplingMode,
+    observed: Option<(Arc<RgbaImage>, ViewSignature)>,
+    changed_at: f64,
     pub region: egui::Rect,
 }
 
@@ -39,7 +54,26 @@ impl Default for DisplayTexture {
                 if let Some((source, key)) = request {
                     let [x, y, width, height] = key.crop;
                     let crop = image::imageops::crop_imm(source.as_ref(), x, y, width, height);
-                    let pixels = core_image::display_preview::display_preview(&*crop, key.limit);
+                    let pixels = match (key.sampling, key.target) {
+                        (SamplingMode::HighQuality, Some(size)) => {
+                            core_image::display_preview::high_quality_preview(
+                                &*crop, size, key.limit,
+                            )
+                        }
+                        (SamplingMode::Pixel, _) => {
+                            let [w, h] = core_image::display_preview::bounded_display_size(
+                                [width, height],
+                                key.limit,
+                            );
+                            image::imageops::resize(
+                                &*crop,
+                                w,
+                                h,
+                                image::imageops::FilterType::Nearest,
+                            )
+                        }
+                        _ => core_image::display_preview::display_preview(&*crop, key.limit),
+                    };
                     let color = egui::ColorImage::from_rgba_unmultiplied(
                         [pixels.width() as usize, pixels.height() as usize],
                         pixels.as_raw(),
@@ -56,12 +90,18 @@ impl Default for DisplayTexture {
             results,
             requested: None,
             ready: false,
+            sampling: SamplingMode::default(),
+            observed: None,
+            changed_at: 0.0,
             region: egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         }
     }
 }
 
 impl DisplayTexture {
+    pub fn set_sampling(&mut self, sampling: SamplingMode) {
+        self.sampling = sampling;
+    }
     #[cfg(test)]
     pub fn sync(
         &mut self,
@@ -77,6 +117,8 @@ impl DisplayTexture {
         let key = DisplayKey {
             crop: [0, 0, source.width(), source.height()],
             limit,
+            sampling: SamplingMode::Fast,
+            target: None,
         };
         self.deliver(ctx, source, texture, name, key);
     }
@@ -97,7 +139,40 @@ impl DisplayTexture {
         let rect =
             ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(canvas_id).with("bounds")));
         let rect = rect.unwrap_or_else(|| ctx.available_rect());
-        let key = display_key(source.dimensions(), view, rect, ctx.pixels_per_point(), gpu);
+        let density = ctx.pixels_per_point();
+        let now = ctx.input(|input| input.time);
+        let signature = ViewSignature {
+            zoom: view.zoom,
+            pan: view.pan,
+            auto_fit: view.auto_fit,
+            rect,
+            density,
+            sampling: self.sampling,
+        };
+        if !self
+            .observed
+            .as_ref()
+            .is_some_and(|(image, old)| Arc::ptr_eq(image, &source) && *old == signature)
+        {
+            self.observed = Some((Arc::clone(&source), signature));
+            self.changed_at = now;
+        }
+        let mut key = display_key(source.dimensions(), view, rect, density, gpu);
+        let interacting = ctx
+            .input(|input| input.pointer.any_down() || input.raw_scroll_delta != egui::Vec2::ZERO);
+        if interacting {
+            self.changed_at = now;
+        }
+        if self.sampling == SamplingMode::Pixel {
+            key.sampling = SamplingMode::Pixel;
+        } else if self.sampling == SamplingMode::HighQuality {
+            let remaining = (0.150 - (now - self.changed_at)).max(0.0);
+            if remaining == 0.0 && !interacting {
+                key = high_quality_key(key, source.dimensions(), view, rect, density);
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining.max(0.016)));
+            }
+        }
         self.deliver(ctx, source, texture, name, key);
     }
 
@@ -130,7 +205,12 @@ impl DisplayTexture {
         }
         while let Ok(result) = self.results.try_recv() {
             if Arc::ptr_eq(&result.source, &source) && result.key == key {
-                *texture = Some(ctx.load_texture(name, result.color, egui::TextureOptions::LINEAR));
+                let options = if key.sampling == SamplingMode::Pixel {
+                    egui::TextureOptions::NEAREST
+                } else {
+                    egui::TextureOptions::LINEAR
+                };
+                *texture = Some(ctx.load_texture(name, result.color, options));
                 let [x, y, width, height] = key.crop;
                 self.region = egui::Rect::from_min_max(
                     egui::pos2(
@@ -151,6 +231,7 @@ impl DisplayTexture {
     }
 
     pub fn clear(&mut self) {
+        self.observed = None;
         self.requested = None;
         self.ready = false;
         if let Ok(mut pending) = self.pending.lock() {
@@ -191,13 +272,214 @@ fn display_key(
     DisplayKey {
         crop: [x, y, right - x, bottom - y],
         limit,
+        sampling: SamplingMode::Fast,
+        target: None,
     }
+}
+
+fn high_quality_key(
+    mut key: DisplayKey,
+    (width, height): (u32, u32),
+    view: &viewer_state::ViewportState,
+    rect: egui::Rect,
+    density: f32,
+) -> DisplayKey {
+    let scale = if view.auto_fit {
+        ((rect.width() - 20.0).max(10.0) / width as f32)
+            .min((rect.height() - 20.0).max(10.0) / height as f32)
+    } else {
+        view.zoom
+    } * density;
+    if scale > 1.0 {
+        let size = core_image::display_preview::bounded_display_size(
+            [
+                (key.crop[2] as f32 * scale).ceil() as u32,
+                (key.crop[3] as f32 * scale).ceil() as u32,
+            ],
+            key.limit,
+        );
+        if size[0] > key.crop[2] || size[1] > key.crop[3] {
+            key.sampling = SamplingMode::HighQuality;
+            key.target = Some(size);
+        }
+    }
+    key
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    fn frame(
+        display: &mut DisplayTexture,
+        ctx: &egui::Context,
+        source: &Arc<RgbaImage>,
+        texture: &mut Option<egui::TextureHandle>,
+        view: &viewer_state::ViewportState,
+        time: f64,
+    ) {
+        let _ = ctx.run(
+            egui::RawInput {
+                time: Some(time),
+                max_texture_side: Some(1024),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| display.sync_view(ctx, Arc::clone(source), texture, "quality", view, "quality"),
+        );
+    }
+    #[test]
+    fn idle_250_percent_uses_cubic_texture_and_pan_resets_timer() {
+        let ctx = egui::Context::default();
+        let source = Arc::new(RgbaImage::from_pixel(
+            64,
+            32,
+            image::Rgba([12, 34, 56, 255]),
+        ));
+        let mut display = DisplayTexture::default();
+        let mut texture = None;
+        let mut view = viewer_state::ViewportState {
+            zoom: 2.5,
+            auto_fit: false,
+            ..Default::default()
+        };
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.0);
+        assert!(display.requested.as_ref().unwrap().1.target.is_none());
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.149);
+        assert!(display.requested.as_ref().unwrap().1.target.is_none());
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.151);
+        assert_eq!(
+            display.requested.as_ref().unwrap().1.target,
+            Some([160, 80])
+        );
+        let start = Instant::now();
+        while !display.ready {
+            frame(&mut display, &ctx, &source, &mut texture, &view, 0.2);
+            assert!(start.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(texture.as_ref().unwrap().size(), [160, 80]);
+        view.pan.0 = 1.0;
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.21);
+        assert!(display.requested.as_ref().unwrap().1.target.is_none());
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.35);
+        assert!(display.requested.as_ref().unwrap().1.target.is_none());
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.37);
+        assert!(display.requested.as_ref().unwrap().1.target.is_some());
+    }
+    #[test]
+    fn quality_dimensions_include_dpi_and_stay_within_gpu_budget() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 240.0));
+        let mut view = viewer_state::ViewportState {
+            zoom: 2.5,
+            auto_fit: false,
+            ..Default::default()
+        };
+        let key = display_key((64, 32), &view, rect, 1.5, 8192);
+        assert_eq!(
+            high_quality_key(key, (64, 32), &view, rect, 1.5).target,
+            Some([240, 120])
+        );
+        for gpu in [1, 32, 256, 16384] {
+            view.zoom = 50.0;
+            let key = display_key((12000, 8000), &view, rect, 2.0, gpu);
+            let quality = high_quality_key(key, (12000, 8000), &view, rect, 2.0);
+            if let Some([w, h]) = quality.target {
+                assert!(w.max(h) <= gpu.min(4096));
+                assert!(u64::from(w) * u64::from(h) * 4 <= 64 * 1024 * 1024);
+            }
+        }
+        view.zoom = 1.0;
+        let key = display_key((64, 32), &view, rect, 1.0, 8192);
+        assert!(
+            high_quality_key(key, (64, 32), &view, rect, 1.0)
+                .target
+                .is_none()
+        );
+    }
+    #[test]
+    fn stale_quality_cannot_override_pixel_mode_or_another_source() {
+        let ctx = egui::Context::default();
+        let source = Arc::new(RgbaImage::new(4, 4));
+        let view = viewer_state::ViewportState {
+            zoom: 2.5,
+            auto_fit: false,
+            ..Default::default()
+        };
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 240.0));
+        let key = high_quality_key(
+            display_key((4, 4), &view, rect, 1.0, 1024),
+            (4, 4),
+            &view,
+            rect,
+            1.0,
+        );
+        let (tx, rx) = mpsc::channel();
+        let mut display = DisplayTexture {
+            results: rx,
+            sampling: SamplingMode::Pixel,
+            ..Default::default()
+        };
+        tx.send(ResultImage {
+            source: Arc::clone(&source),
+            key,
+            color: egui::ColorImage::new([10, 10], egui::Color32::RED),
+        })
+        .unwrap();
+        let mut texture = None;
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.0);
+        assert!(texture.is_none());
+        assert_eq!(
+            display.requested.as_ref().unwrap().1.sampling,
+            SamplingMode::Pixel
+        );
+        tx.send(ResultImage {
+            source: Arc::new(RgbaImage::new(4, 4)),
+            key: display.requested.as_ref().unwrap().1,
+            color: egui::ColorImage::new([4, 4], egui::Color32::RED),
+        })
+        .unwrap();
+        frame(&mut display, &ctx, &source, &mut texture, &view, 0.2);
+        assert!(texture.is_none());
+    }
+    #[test]
+    fn pixel_mode_uses_nearest_sampler_and_fast_mode_does_not_upscale() {
+        for sampling in [SamplingMode::Fast, SamplingMode::Pixel] {
+            let ctx = egui::Context::default();
+            let source = Arc::new(RgbaImage::new(64, 32));
+            let mut display = DisplayTexture {
+                sampling,
+                ..Default::default()
+            };
+            let mut texture = None;
+            let view = viewer_state::ViewportState {
+                zoom: 4.0,
+                auto_fit: false,
+                ..Default::default()
+            };
+            let start = Instant::now();
+            while !display.ready {
+                frame(&mut display, &ctx, &source, &mut texture, &view, 0.5);
+                assert!(start.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let texture = texture.unwrap();
+            assert_eq!(texture.size(), [64, 32]);
+            let options = ctx.tex_manager().read().meta(texture.id()).unwrap().options;
+            assert_eq!(
+                options,
+                if sampling == SamplingMode::Pixel {
+                    egui::TextureOptions::NEAREST
+                } else {
+                    egui::TextureOptions::LINEAR
+                }
+            );
+        }
+    }
 
     #[test]
     fn viewport_preview_preserves_native_detail_and_bounds_memory() {

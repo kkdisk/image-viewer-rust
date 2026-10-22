@@ -11,6 +11,10 @@ pub struct BrowsingState {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {
+    Refresh,
+    Delete,
+    Slideshow,
+    CopyPath,
     Open,
     Save,
     SaveAs,
@@ -51,6 +55,38 @@ macro_rules! binding {
     };
 }
 const BINDINGS: &[Binding] = &[
+    binding!(
+        &[Key::F5],
+        false,
+        Some(false),
+        "F5",
+        "重新整理並重載",
+        Refresh
+    ),
+    binding!(
+        &[Key::Delete],
+        false,
+        Some(false),
+        "Delete",
+        "移至回收桶",
+        Delete
+    ),
+    binding!(
+        &[Key::Space],
+        false,
+        Some(false),
+        "空白鍵",
+        "開始／停止幻燈片",
+        Slideshow
+    ),
+    binding!(
+        &[Key::C],
+        true,
+        Some(true),
+        "Ctrl+Shift+C",
+        "複製來源路徑",
+        CopyPath
+    ),
     binding!(
         &[Key::O],
         true,
@@ -147,6 +183,7 @@ pub(crate) fn actions(ctx: &egui::Context) -> Vec<Action> {
 }
 impl ImageViewerApp {
     pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        self.stop_slideshow();
         self.browsing.fullscreen = !self.browsing.fullscreen;
         self.browsing.moved = Some(Instant::now());
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.browsing.fullscreen));
@@ -179,6 +216,12 @@ impl ImageViewerApp {
                                 self.playlist.len(),
                                 self.viewport.zoom * 100.0
                             ));
+                            if self.slideshow.playing {
+                                ui.label(format!(
+                                    "幻燈片播放中；略過 {} 張載入失敗圖片（空白鍵停止）",
+                                    self.slideshow.failures
+                                ));
+                            }
                             if ui.button("離開全螢幕（F11／Esc）").clicked() {
                                 self.toggle_fullscreen(ctx);
                             }

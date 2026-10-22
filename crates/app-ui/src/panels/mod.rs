@@ -15,6 +15,17 @@ pub use histogram_view::{HistogramMode, HistogramWidget};
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
+    Sampling(crate::preferences::SamplingMode),
+    Refresh,
+    Delete,
+    Slideshow,
+    SlideInterval(u64),
+    SlideLoop,
+    SlideRandom,
+    ConfirmDelete,
+    Info,
+    Transform(crate::convenience::Transform),
+    CopyPath,
     OpenFolder,
     OpenRecent(usize),
     Sort(crate::playlist::SortOptions),
@@ -34,6 +45,11 @@ pub enum MenuAction {
 
 /// 選單狀態與切換開關
 pub struct MenuBarState<'a> {
+    pub sampling: crate::preferences::SamplingMode,
+    pub slideshow_seconds: u64,
+    pub slideshow_loop: bool,
+    pub slideshow_random: bool,
+    pub confirm_delete: bool,
     pub recent: &'a [crate::recent::RecentEntry],
     pub sort: crate::playlist::SortOptions,
     pub can_undo: bool,
@@ -122,6 +138,24 @@ impl MenuBar {
                     });
 
                     ui.menu_button("編輯 (Edit)", |ui| {
+                        for (label, transform) in [
+                            ("順時針旋轉 90 度", crate::convenience::Transform::Clockwise),
+                            (
+                                "逆時針旋轉 90 度",
+                                crate::convenience::Transform::Counterclockwise,
+                            ),
+                            ("水平翻轉", crate::convenience::Transform::Horizontal),
+                            ("垂直翻轉", crate::convenience::Transform::Vertical),
+                        ] {
+                            if ui.button(label).clicked() {
+                                triggered_action = Some(MenuAction::Transform(transform));
+                                ui.close_menu();
+                            }
+                        }
+                        if ui.button("複製來源路徑").clicked() {
+                            triggered_action = Some(MenuAction::CopyPath);
+                            ui.close_menu();
+                        }
                         let undo_btn = ui.add_enabled(
                             state.can_undo,
                             egui::Button::new("⮌ 復原 (Undo)    Ctrl+Z"),
@@ -142,6 +176,68 @@ impl MenuBar {
                     });
 
                     ui.menu_button("檢視 (View)", |ui| {
+                        ui.menu_button("縮放取樣", |ui| {
+                            for mode in [
+                                crate::preferences::SamplingMode::Fast,
+                                crate::preferences::SamplingMode::HighQuality,
+                                crate::preferences::SamplingMode::Pixel,
+                            ] {
+                                if ui
+                                    .selectable_label(state.sampling == mode, mode.label())
+                                    .clicked()
+                                {
+                                    triggered_action = Some(MenuAction::Sampling(mode));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        if ui.button("重新整理並重載（F5）").clicked() {
+                            triggered_action = Some(MenuAction::Refresh);
+                            ui.close_menu();
+                        }
+                        if ui.button("開始／停止幻燈片（空白鍵）").clicked() {
+                            triggered_action = Some(MenuAction::Slideshow);
+                            ui.close_menu();
+                        }
+                        ui.menu_button("幻燈片選項", |ui| {
+                            for seconds in [2, 3, 5, 10] {
+                                if ui
+                                    .selectable_label(
+                                        state.slideshow_seconds == seconds,
+                                        format!("{seconds} 秒"),
+                                    )
+                                    .clicked()
+                                {
+                                    triggered_action = Some(MenuAction::SlideInterval(seconds));
+                                }
+                            }
+                            if ui
+                                .selectable_label(state.slideshow_loop, "循環播放")
+                                .clicked()
+                            {
+                                triggered_action = Some(MenuAction::SlideLoop);
+                            }
+                            if ui
+                                .selectable_label(state.slideshow_random, "隨機順序")
+                                .clicked()
+                            {
+                                triggered_action = Some(MenuAction::SlideRandom);
+                            }
+                        });
+                        if ui.button("移至回收桶（Delete）").clicked() {
+                            triggered_action = Some(MenuAction::Delete);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .selectable_label(state.confirm_delete, "刪除前確認")
+                            .clicked()
+                        {
+                            triggered_action = Some(MenuAction::ConfirmDelete);
+                        }
+                        if ui.button("圖片資訊（唯讀）").clicked() {
+                            triggered_action = Some(MenuAction::Info);
+                            ui.close_menu();
+                        }
                         if ui.button("全螢幕（F11）").clicked() {
                             triggered_action = Some(MenuAction::Fullscreen);
                             ui.close_menu();

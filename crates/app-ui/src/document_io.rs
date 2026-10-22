@@ -21,6 +21,7 @@ pub(crate) struct LoadedImage {
     pub archive: Option<ManagedArchiveSession>,
     pub reference: bool,
     pub animated: bool,
+    pub info: crate::convenience::FileInfo,
 }
 
 struct ReadTask {
@@ -49,13 +50,14 @@ enum Completion {
     Read {
         id: u64,
         reference: bool,
-        result: Result<LoadedImage, String>,
+        result: Result<Box<LoadedImage>, String>,
     },
     Write {
         id: u64,
         path: PathBuf,
         image: Arc<RgbaImage>,
-        result: Result<ImagePlaylist, String>,
+        result: Result<Box<ImagePlaylist>, String>,
+        info: crate::convenience::FileInfo,
     },
 }
 
@@ -148,7 +150,9 @@ impl Default for DocumentIo {
                                 {
                                     task.playlist.scan_from_file(&task.path);
                                 }
+                                let info = crate::convenience::FileInfo::read(&task.path);
                                 Some(LoadedImage {
+                                    info,
                                     opened_path: opened_path.canonicalize().unwrap_or(opened_path),
                                     path: task.path,
                                     pixels: image.to_rgba8(),
@@ -167,7 +171,7 @@ impl Default for DocumentIo {
                         Completion::Read {
                             id: task.id,
                             reference: task.reference,
-                            result,
+                            result: result.map(Box::new),
                         }
                     }
                     Task::Write { id, path, image } => {
@@ -183,9 +187,10 @@ impl Default for DocumentIo {
                         .map_err(|error| error.to_string());
                         Completion::Write {
                             id,
+                            info: crate::convenience::FileInfo::read(&path),
                             path,
                             image,
-                            result,
+                            result: result.map(Box::new),
                         }
                     }
                 };
@@ -238,6 +243,9 @@ impl ImageViewerApp {
     pub fn is_saving(&self) -> bool {
         self.document_io.pending_save.is_some() || self.animation_save.is_some()
     }
+    pub fn is_document_busy(&self) -> bool {
+        self.is_saving() || self.is_transforming() || self.is_recycling()
+    }
     pub fn is_loading_image(&self) -> bool {
         self.document_io.pending_main.is_some()
     }
@@ -248,7 +256,7 @@ impl ImageViewerApp {
         archive: Option<ManagedArchiveSession>,
         reference: bool,
     ) -> Result<(), String> {
-        if self.is_saving() {
+        if self.is_document_busy() {
             return Err("儲存進行中，請稍候再開啟圖片".into());
         }
         let id = self.document_io.next_id();
@@ -295,7 +303,7 @@ impl ImageViewerApp {
     }
 
     pub(crate) fn enqueue_save(&mut self, path: PathBuf) -> bool {
-        if self.is_saving() || self.is_loading_image() {
+        if self.is_document_busy() || self.is_loading_image() {
             return false;
         }
         let Some(image) = self.session.as_ref().map(|s| s.committed_image()) else {
@@ -385,19 +393,27 @@ impl ImageViewerApp {
                                 }
                         })
                     };
+                    if !reference {
+                        self.slideshow_loaded(result.is_ok(), Instant::now());
+                    }
                     match result {
                         Ok(loaded) if !reference && changed && self.has_unsaved_changes() => {
-                            self.defer_leave(crate::navigation_guard::LeaveAction::Loaded(
-                                Box::new(loaded),
-                            ));
+                            self.defer_leave(crate::navigation_guard::LeaveAction::Loaded(loaded));
                         }
-                        Ok(loaded) => self.install_loaded_image(loaded),
+                        Ok(loaded) => self.install_loaded_image(*loaded),
                         Err(error) => {
                             if let Some(path) = attempted_path {
                                 self.remove_recent(path);
                             }
-                            self.status_notification =
-                                Some((format!("載入失敗：{error}"), Instant::now()))
+                            let message = if self.slideshow.playing {
+                                format!(
+                                    "載入失敗：{error}；幻燈片已略過 {} 張",
+                                    self.slideshow.failures
+                                )
+                            } else {
+                                format!("載入失敗：{error}")
+                            };
+                            self.status_notification = Some((message, Instant::now()))
                         }
                     }
                 }
@@ -406,6 +422,7 @@ impl ImageViewerApp {
                     path,
                     image,
                     result,
+                    info,
                 } => {
                     if self.document_io.pending_save != Some(id) {
                         continue;
@@ -423,7 +440,8 @@ impl ImageViewerApp {
                                 session.set_source_path(path);
                                 session.mark_saved();
                                 self.animated_source = false;
-                                self.playlist = playlist;
+                                self.convenience.info = info;
+                                self.playlist = *playlist;
                             }
                             if !matches_current {
                                 self.leave_guard.save_then_leave = false;
@@ -453,13 +471,17 @@ impl ImageViewerApp {
     }
 
     pub(crate) fn io_needs_repaint(&self) -> bool {
-        self.is_loading_image() || self.document_io.pending_reference.is_some() || self.is_saving()
+        self.is_loading_image()
+            || self.document_io.pending_reference.is_some()
+            || self.is_document_busy()
     }
 
     /// 僅供測試及非介面同步流程使用；畫面更新只呼叫非阻塞輪詢。
     pub fn wait_document_io(&mut self, timeout: Duration) -> bool {
         let start = Instant::now();
         loop {
+            self.poll_convenience();
+            self.poll_file_actions();
             self.poll_document_io();
             if !self.io_needs_repaint() {
                 return true;

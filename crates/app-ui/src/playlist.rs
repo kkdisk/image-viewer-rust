@@ -48,6 +48,17 @@ pub struct ImagePlaylist {
 
 #[allow(dead_code)]
 impl ImagePlaylist {
+    pub fn remove_file(&mut self, path: &Path) -> Option<PathBuf> {
+        let index = self.files.iter().position(|p| p == path).unwrap_or(0);
+        self.files.retain(|p| p != path);
+        self.attributes.remove(path);
+        self.current_index = if self.files.is_empty() {
+            None
+        } else {
+            Some(index.min(self.files.len() - 1))
+        };
+        self.current_file().cloned()
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -169,6 +180,7 @@ impl ImagePlaylist {
             self.current_index = Some(idx);
             true
         } else {
+            self.current_index = None;
             false
         }
     }

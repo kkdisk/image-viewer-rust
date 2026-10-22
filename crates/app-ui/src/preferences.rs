@@ -8,9 +8,31 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SamplingMode {
+    Fast,
+    #[default]
+    HighQuality,
+    Pixel,
+}
+impl SamplingMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fast => "快速（雙線性）",
+            Self::HighQuality => "高品質（雙三次）",
+            Self::Pixel => "像素（最近鄰）",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    pub sampling: SamplingMode,
+    pub confirm_delete: bool,
+    pub slideshow_seconds: u64,
+    pub slideshow_loop: bool,
+    pub slideshow_random: bool,
     pub sort: crate::playlist::SortOptions,
     pub recent: Vec<crate::recent::RecentEntry>,
     pub recent_removed: Vec<crate::recent::RecentEntry>,
@@ -29,6 +51,11 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            sampling: SamplingMode::default(),
+            confirm_delete: true,
+            slideshow_seconds: 3,
+            slideshow_loop: true,
+            slideshow_random: false,
             version: 2,
             sort: Default::default(),
             recent: Vec::new(),
@@ -371,6 +398,28 @@ impl crate::app::ImageViewerApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sampling_defaults_to_quality_and_survives_old_settings_roundtrip() {
+        let old: Preferences = serde_json::from_str(r#"{"version":2,"magnifier_zoom":8}"#).unwrap();
+        assert_eq!(old.sampling, SamplingMode::HighQuality);
+        for sampling in [
+            SamplingMode::Fast,
+            SamplingMode::HighQuality,
+            SamplingMode::Pixel,
+        ] {
+            let settings = Preferences {
+                sampling,
+                ..old.clone()
+            };
+            let restored: Preferences =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(settings, restored);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.json");
+            write(&path, &settings).unwrap();
+            assert_eq!(load(&path).unwrap().sampling, sampling);
+        }
+    }
 
     struct ChildGuard(std::process::Child);
     impl Drop for ChildGuard {

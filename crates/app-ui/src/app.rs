@@ -20,6 +20,9 @@ use crate::thumbnail_loader::ThumbnailManager;
 
 /// 主圖片瀏覽與編輯桌面應用狀態
 pub struct ImageViewerApp {
+    pub file_actions: crate::file_actions::FileActions,
+    pub slideshow: crate::slideshow::Slideshow,
+    pub convenience: crate::convenience::ConvenienceState,
     pub browsing: crate::browsing::BrowsingState,
     pub(crate) animated_source: bool,
     pub(crate) animation_save: Option<crate::animation_save::AnimationSave>,
@@ -103,6 +106,9 @@ pub struct ImageViewerApp {
 impl Default for ImageViewerApp {
     fn default() -> Self {
         Self {
+            file_actions: Default::default(),
+            slideshow: Default::default(),
+            convenience: Default::default(),
             browsing: Default::default(),
             animated_source: false,
             animation_save: None,
@@ -165,7 +171,7 @@ impl ImageViewerApp {
 
     /// 開啟指定路徑之影像或壓縮檔（.zip / .7z）
     pub fn open_file_path(&mut self, path: PathBuf) -> Result<(), String> {
-        if self.is_saving() {
+        if self.is_document_busy() {
             return Err("儲存進行中，請稍候再開啟檔案".into());
         }
         if self.has_pending_leave() {
@@ -311,6 +317,12 @@ impl ImageViewerApp {
 
     /// 開啟指定路徑之影像，並視情況維護播放清單
     pub fn open_image_path(&mut self, path: PathBuf) -> Result<(), core_image::ImageError> {
+        if self.file_actions.confirming_delete || self.is_document_busy() {
+            return Err(core_image::ImageError::Io(std::io::Error::other(
+                "圖片操作進行中，請先完成或取消確認",
+            )));
+        }
+        self.stop_slideshow();
         if self.defer_leave(crate::navigation_guard::LeaveAction::Image(path.clone())) {
             return Ok(());
         }
@@ -335,6 +347,7 @@ impl ImageViewerApp {
             self.comparison.is_active = true;
             return;
         }
+        self.convenience.info = loaded.info;
         self.animated_source = loaded.animated;
         if let Some(archive) = loaded.archive {
             self.archive_session = Some(archive);
@@ -456,6 +469,7 @@ impl ImageViewerApp {
 
     /// 切換至指定索引之圖片
     pub fn navigate_to(&mut self, index: usize) {
+        self.stop_slideshow();
         if let Some(path) = self.playlist.files().get(index).cloned()
             && let Err(error) = self.open_image_path(path)
         {
@@ -465,6 +479,10 @@ impl ImageViewerApp {
 
     /// 更新 GPU 影像紋理（主視口與雙圖左側視口）
     fn sync_texture(&mut self, ctx: &egui::Context) {
+        let sampling = self.preferences.current.sampling;
+        self.active_display.set_sampling(sampling);
+        self.original_display.set_sampling(sampling);
+        self.reference_display.set_sampling(sampling);
         if let Some(session) = &self.session {
             self.active_display.sync_view(
                 ctx,
@@ -553,7 +571,7 @@ impl ImageViewerApp {
 
     /// 僅在背景預覽完成後套用，並同步重設介面參數。
     pub fn apply_current_adjustments(&mut self) -> bool {
-        if self.is_saving() {
+        if self.is_document_busy() {
             return false;
         }
         if self.pending_adjustment.is_some() || self.debouncer.is_computing() {
@@ -572,7 +590,7 @@ impl ImageViewerApp {
 
     /// 復原上一動作
     pub fn undo(&mut self) {
-        if self.is_saving() {
+        if self.is_document_busy() {
             return;
         }
         self.debouncer.cancel_pending();
@@ -586,7 +604,7 @@ impl ImageViewerApp {
 
     /// 重做下一動作
     pub fn redo(&mut self) {
-        if self.is_saving() {
+        if self.is_document_busy() {
             return;
         }
         self.debouncer.cancel_pending();
@@ -628,10 +646,13 @@ impl ImageViewerApp {
             ));
             return false;
         }
-        if self.is_saving() || self.is_loading_image() {
+        if self.is_document_busy() || self.is_loading_image() {
             return false;
         }
-        if self.animated_source
+        if (self.animated_source
+            || target_path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg")
+            }))
             && let Some(session) = &self.session
         {
             self.animation_save = Some(crate::animation_save::AnimationSave {
@@ -713,7 +734,10 @@ impl ImageViewerApp {
     /// 處理鍵盤快捷鍵
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         use crate::browsing::Action;
-        if self.has_pending_leave() || self.is_saving() {
+        if self.has_pending_leave()
+            || self.is_document_busy()
+            || self.file_actions.confirming_delete
+        {
             return;
         }
         if ctx.input(|input| input.key_pressed(Key::Escape)) {
@@ -725,6 +749,13 @@ impl ImageViewerApp {
                 self.duplicate_finder_state.close();
             } else if self.show_password_dialog {
                 self.cancel_archive_loading();
+            } else if self.convenience.info_open && !self.browsing.fullscreen {
+                self.convenience.info_open = false;
+            } else if self.slideshow.playing {
+                self.stop_slideshow();
+                if self.browsing.fullscreen {
+                    self.toggle_fullscreen(ctx);
+                }
             } else if self.browsing.fullscreen {
                 self.toggle_fullscreen(ctx);
             }
@@ -750,6 +781,14 @@ impl ImageViewerApp {
         }
         for action in actions {
             match action {
+                Action::Refresh => self.refresh_directory(true),
+                Action::Delete => {
+                    self.request_delete_current();
+                }
+                Action::Slideshow => {
+                    self.toggle_slideshow(ctx);
+                }
+                Action::CopyPath => self.copy_source_path(ctx),
                 Action::Open => self.open_file_dialog(),
                 Action::Save => {
                     self.save_current_image();
@@ -800,6 +839,10 @@ impl eframe::App for ImageViewerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_convenience();
+        self.poll_file_actions();
+        self.handle_focus_refresh(ctx);
+        self.update_slideshow(ctx);
         self.update_preferences(ctx);
         self.poll_document_io();
         if self.io_needs_repaint() {
@@ -812,7 +855,10 @@ impl eframe::App for ImageViewerApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.request_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        if self.has_pending_leave() || self.is_saving() {
+        if self.has_pending_leave()
+            || self.is_document_busy()
+            || self.file_actions.confirming_delete
+        {
             self.show_guarded_editor(ctx);
             return;
         }
@@ -848,7 +894,10 @@ impl eframe::App for ImageViewerApp {
 
         // 2. 處理鍵盤快捷鍵
         self.handle_shortcuts(ctx);
-        if self.has_pending_leave() || self.is_saving() {
+        if self.has_pending_leave()
+            || self.is_document_busy()
+            || self.file_actions.confirming_delete
+        {
             self.show_guarded_editor(ctx);
             return;
         }
@@ -885,6 +934,11 @@ impl eframe::App for ImageViewerApp {
             let can_redo = self.session.as_ref().map(|s| s.can_redo()).unwrap_or(false);
 
             let mut menu_state = crate::panels::MenuBarState {
+                sampling: self.preferences.current.sampling,
+                slideshow_seconds: self.preferences.current.slideshow_seconds,
+                slideshow_loop: self.preferences.current.slideshow_loop,
+                slideshow_random: self.preferences.current.slideshow_random,
+                confirm_delete: self.preferences.current.confirm_delete,
                 recent: &self.preferences.current.recent,
                 sort: self.preferences.current.sort,
                 can_undo,
@@ -898,6 +952,43 @@ impl eframe::App for ImageViewerApp {
 
             if let Some(action) = MenuBar::show(ctx, &mut menu_state) {
                 match action {
+                    crate::panels::MenuAction::Sampling(mode) => {
+                        self.preferences.current.sampling = mode
+                    }
+                    crate::panels::MenuAction::Refresh => self.refresh_directory(true),
+                    crate::panels::MenuAction::Delete => {
+                        self.request_delete_current();
+                    }
+                    crate::panels::MenuAction::Slideshow => {
+                        self.toggle_slideshow(ctx);
+                    }
+                    crate::panels::MenuAction::SlideInterval(seconds) => {
+                        self.preferences.current.slideshow_seconds = seconds;
+                        self.stop_slideshow();
+                    }
+                    crate::panels::MenuAction::SlideLoop => {
+                        self.preferences.current.slideshow_loop =
+                            !self.preferences.current.slideshow_loop
+                    }
+                    crate::panels::MenuAction::SlideRandom => {
+                        self.preferences.current.slideshow_random =
+                            !self.preferences.current.slideshow_random;
+                        self.stop_slideshow();
+                    }
+                    crate::panels::MenuAction::ConfirmDelete => {
+                        self.preferences.current.confirm_delete =
+                            !self.preferences.current.confirm_delete
+                    }
+                    crate::panels::MenuAction::Info => self.convenience.info_open = true,
+                    crate::panels::MenuAction::CopyPath => self.copy_source_path(ctx),
+                    crate::panels::MenuAction::Transform(transform) => {
+                        if !self.transform_image(transform) {
+                            self.status_notification = Some((
+                                "請先套用或取消預覽，並等待載入完成再旋轉／翻轉".into(),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                    }
                     crate::panels::MenuAction::OpenFolder => {
                         if let Some(path) = rfd::FileDialog::new().pick_folder()
                             && let Err(error) = self.open_image_path(path)
@@ -945,7 +1036,10 @@ impl eframe::App for ImageViewerApp {
                 }
             }
 
-            if self.has_pending_leave() || self.is_saving() {
+            if self.has_pending_leave()
+                || self.is_document_busy()
+                || self.file_actions.confirming_delete
+            {
                 self.show_guarded_editor(ctx);
                 return;
             }
@@ -1280,6 +1374,9 @@ impl eframe::App for ImageViewerApp {
         }
         self.show_leave_dialog(ctx);
         self.show_browsing_overlay(ctx);
+        if !self.browsing.fullscreen {
+            self.show_image_info(ctx);
+        }
         self.update_preferences(ctx);
     }
 }
@@ -1410,6 +1507,70 @@ mod presentation_tests {
     }
 
     #[test]
+    fn high_quality_all_sources_preserve_exact_saved_pixels() {
+        use std::time::{Duration, Instant};
+        let original =
+            image::RgbaImage::from_fn(64, 32, |x, y| image::Rgba([x as u8, y as u8, 91, 255]));
+        let mut app = ImageViewerApp {
+            session: Some(EditingSession::new(original.clone(), None)),
+            reference_image: Some(Arc::new(image::RgbaImage::from_pixel(
+                32,
+                64,
+                image::Rgba([30, 80, 90, 255]),
+            ))),
+            viewport: ViewportState {
+                zoom: 2.5,
+                auto_fit: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        app.comparison.is_active = true;
+        app.comparison.sync_viewport = true;
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        for comparison in [ComparisonSource::Original, ComparisonSource::Reference] {
+            app.comparison.source = comparison;
+            let start = Instant::now();
+            loop {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        time: Some(time),
+                        max_texture_side: Some(1024),
+                        ..Default::default()
+                    },
+                    |ctx| app.sync_texture(ctx),
+                );
+                let left = match comparison {
+                    ComparisonSource::Original => app.original_texture.as_ref(),
+                    _ => app.reference_texture.as_ref(),
+                };
+                if app.texture.as_ref().is_some_and(|t| t.size() == [160, 80])
+                    && left.is_some_and(|t| {
+                        t.size()
+                            == if comparison == ComparisonSource::Original {
+                                [160, 80]
+                            } else {
+                                [80, 160]
+                            }
+                    })
+                {
+                    break;
+                }
+                time += 0.05;
+                assert!(start.elapsed() < Duration::from_secs(5));
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        assert!(!app.has_unsaved_changes());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("高品質顯示後輸出.png");
+        assert!(app.save_image_to(&path));
+        assert!(app.wait_document_io(Duration::from_secs(5)));
+        assert_eq!(image::open(path).unwrap().to_rgba8(), original);
+    }
+
+    #[test]
     fn queued_preview_is_reported_as_computing_without_marking_the_base_dirty() {
         let app = ImageViewerApp {
             session: Some(EditingSession::new(image::RgbaImage::new(1, 1), None)),
@@ -1461,5 +1622,41 @@ mod presentation_tests {
         assert_eq!(app.viewport.zoom, 0.5);
         assert!(!app.is_loading_image());
         assert_eq!(app.playlist.current_index(), Some(0));
+    }
+}
+
+#[cfg(test)]
+mod convenience_shortcut_tests {
+    use super::*;
+    fn key(app: &mut ImageViewerApp, ctx: &egui::Context, key: Key) {
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+                ..Default::default()
+            },
+            |ctx| app.handle_shortcuts(ctx),
+        );
+    }
+    #[test]
+    fn space_starts_and_escape_stops_even_with_hidden_info_window() {
+        let mut app = ImageViewerApp {
+            session: Some(EditingSession::new(image::RgbaImage::new(2, 3), None)),
+            ..Default::default()
+        };
+        app.playlist
+            .set_custom_list(vec![PathBuf::from("1.png"), PathBuf::from("2.png")]);
+        app.convenience.info_open = true;
+        let ctx = egui::Context::default();
+        key(&mut app, &ctx, Key::Space);
+        assert!(app.slideshow.playing && app.browsing.fullscreen);
+        key(&mut app, &ctx, Key::Escape);
+        assert!(!app.slideshow.playing && !app.browsing.fullscreen);
+        assert!(app.convenience.info_open);
     }
 }
