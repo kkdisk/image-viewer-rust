@@ -1,11 +1,11 @@
 //! 像素微調防抖佇列 (Debounce / Latest-Only 非同步運算工作池)
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
-use core_image::{apply_adjustments_rgba, AdjustmentParams};
+use core_image::{AdjustmentParams, apply_adjustments_rgba};
 use image::RgbaImage;
 
 /// 微調運算請求
@@ -86,11 +86,7 @@ impl AdjustmentDebouncer {
     }
 
     /// 提交微調參數計算請求（自動遞增版本號，丟棄前序過期運算）
-    pub fn request(
-        &self,
-        base_image: Arc<RgbaImage>,
-        params: AdjustmentParams,
-    ) -> u64 {
+    pub fn request(&self, base_image: Arc<RgbaImage>, params: AdjustmentParams) -> u64 {
         let req_id = self.current_request_id.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.sender.send(AdjustmentTask {
             request_id: req_id,

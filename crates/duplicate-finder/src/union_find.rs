@@ -87,7 +87,9 @@ impl UnionFind {
             return;
         }
 
-        let combined_max = self.max_dist[root_i].max(self.max_dist[root_j]).max(distance);
+        let combined_max = self.max_dist[root_i]
+            .max(self.max_dist[root_j])
+            .max(distance);
 
         // 按秩合併
         match self.rank[root_i].cmp(&self.rank[root_j]) {
@@ -171,7 +173,10 @@ pub fn find_similar_groups<P: AsRef<Path>>(
     let mut group_map: HashMap<usize, Vec<PathBuf>> = HashMap::new();
     for (i, (path, _)) in hashes.iter().enumerate() {
         let root = uf.find(i);
-        group_map.entry(root).or_default().push(path.as_ref().to_path_buf());
+        group_map
+            .entry(root)
+            .or_default()
+            .push(path.as_ref().to_path_buf());
     }
 
     let mut results: Vec<DuplicateGroup> = group_map
@@ -189,9 +194,7 @@ pub fn find_similar_groups<P: AsRef<Path>>(
 }
 
 /// 依據 MD5 檔案雜湊進行精確重複分群 (完全相同檔案)
-pub fn find_exact_md5_groups<P: AsRef<Path>>(
-    md5_list: &[(P, String)],
-) -> Vec<DuplicateGroup> {
+pub fn find_exact_md5_groups<P: AsRef<Path>>(md5_list: &[(P, String)]) -> Vec<DuplicateGroup> {
     let mut map: HashMap<&str, Vec<PathBuf>> = HashMap::new();
 
     for (path, hash) in md5_list {

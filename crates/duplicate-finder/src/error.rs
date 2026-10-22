@@ -14,10 +14,7 @@ pub enum DuplicateError {
     },
 
     #[error("影像解碼失敗: {path:?}, 理由: {message}")]
-    DecodeError {
-        path: PathBuf,
-        message: String,
-    },
+    DecodeError { path: PathBuf, message: String },
 
     #[error("雜湊計算失敗: {0}")]
     HashError(String),

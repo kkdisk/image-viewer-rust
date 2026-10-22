@@ -18,7 +18,9 @@ pub enum ImageError {
     Exif(String),
 
     /// 影像總像素數超過安全上限（防止記憶體解壓炸彈）
-    #[error("影像尺寸過大 ({width}x{height} = {total_pixels} 像素)，超過安全上限 {max_pixels} 像素")]
+    #[error(
+        "影像尺寸過大 ({width}x{height} = {total_pixels} 像素)，超過安全上限 {max_pixels} 像素"
+    )]
     ImageTooLarge {
         /// 圖片寬度
         width: u32,

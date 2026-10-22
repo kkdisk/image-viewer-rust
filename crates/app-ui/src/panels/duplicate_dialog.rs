@@ -3,20 +3,20 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use egui::{
-    pos2, vec2, Align, Align2, Button, Color32, Frame, Layout, Margin, ProgressBar, Rect,
-    RichText, Rounding, ScrollArea, Stroke, Ui, Window,
+    Align, Align2, Button, Color32, Frame, Layout, Margin, ProgressBar, Rect, RichText, Rounding,
+    ScrollArea, Stroke, Ui, Window, pos2, vec2,
 };
 use rayon::prelude::*;
 
 use crate::theme::ThemeColors;
 use duplicate_finder::{
-    compute_md5, compute_phash, find_exact_md5_groups, find_similar_groups, DuplicateGroup,
+    DuplicateGroup, compute_md5, compute_phash, find_exact_md5_groups, find_similar_groups,
 };
 
 /// 查重模式
@@ -190,7 +190,10 @@ impl DuplicateFinderState {
                                 let _ = tx_prog.send(ScanMessage::Progress {
                                     current: done,
                                     total: total_files,
-                                    stage: format!("正在計算檔案 MD5 雜湊 ({}/{})", done, total_files),
+                                    stage: format!(
+                                        "正在計算檔案 MD5 雜湊 ({}/{})",
+                                        done, total_files
+                                    ),
                                 });
                             }
                             Some((p.clone(), hash))
@@ -219,7 +222,10 @@ impl DuplicateFinderState {
                                 let _ = tx_prog.send(ScanMessage::Progress {
                                     current: done,
                                     total: total_files,
-                                    stage: format!("正在解碼並計算 pHash 感知雜湊 ({}/{})", done, total_files),
+                                    stage: format!(
+                                        "正在解碼並計算 pHash 感知雜湊 ({}/{})",
+                                        done, total_files
+                                    ),
                                 });
                             }
                             Some((p.clone(), hash))
@@ -283,9 +289,8 @@ impl DuplicateFinderState {
                                 .items
                                 .into_iter()
                                 .map(|p| {
-                                    let size_bytes = std::fs::metadata(&p)
-                                        .map(|m| m.len())
-                                        .unwrap_or(0);
+                                    let size_bytes =
+                                        std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
                                     let dims = image::image_dimensions(&p).ok();
                                     DuplicateItemUi {
                                         path: p,
@@ -466,7 +471,8 @@ impl DuplicateFinderState {
                 color_image,
                 egui::TextureOptions::LINEAR,
             );
-            self.preview_textures.insert(path.to_path_buf(), tex.clone());
+            self.preview_textures
+                .insert(path.to_path_buf(), tex.clone());
             Some(tex)
         } else {
             None
@@ -500,10 +506,7 @@ pub struct DuplicateFinderDialog;
 impl DuplicateFinderDialog {
     /// 渲染重複檢查器主視窗
     /// 回傳若點擊「在檢視器開啟」時目標圖片路徑
-    pub fn show(
-        ctx: &egui::Context,
-        state: &mut DuplicateFinderState,
-    ) -> Option<PathBuf> {
+    pub fn show(ctx: &egui::Context, state: &mut DuplicateFinderState) -> Option<PathBuf> {
         if !state.is_open {
             return None;
         }
@@ -541,7 +544,11 @@ impl DuplicateFinderDialog {
             .show(ctx, |ui| {
                 // 1. 頂部控制與設定列
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("📂 掃描目錄:").strong().color(Color32::from_rgb(245, 245, 250)));
+                    ui.label(
+                        RichText::new("📂 掃描目錄:")
+                            .strong()
+                            .color(Color32::from_rgb(245, 245, 250)),
+                    );
 
                     let dir_display = state
                         .target_dir
@@ -559,7 +566,12 @@ impl DuplicateFinderDialog {
                             .monospace(),
                     );
 
-                    if ui.add_enabled(!is_scanning, Button::new(RichText::new("瀏覽 (Browse)...").color(Color32::WHITE))).clicked()
+                    if ui
+                        .add_enabled(
+                            !is_scanning,
+                            Button::new(RichText::new("瀏覽 (Browse)...").color(Color32::WHITE)),
+                        )
+                        .clicked()
                         && let Some(folder) = rfd::FileDialog::new().pick_folder()
                     {
                         state.target_dir = Some(folder);
@@ -579,23 +591,39 @@ impl DuplicateFinderDialog {
                     ui.add_space(8.0);
 
                     // 模式切換
-                    ui.label(RichText::new("模式:").strong().color(Color32::from_rgb(245, 245, 250)));
+                    ui.label(
+                        RichText::new("模式:")
+                            .strong()
+                            .color(Color32::from_rgb(245, 245, 250)),
+                    );
                     let phash_active = state.mode == DuplicateMode::SimilarPhash;
-                    let phash_btn = Button::new(
-                        RichText::new("🔍 感知相似 (pHash)")
-                            .color(if phash_active { Color32::WHITE } else { Color32::from_rgb(205, 210, 225) }),
-                    )
-                    .fill(if phash_active { ThemeColors::ACCENT } else { Color32::from_rgb(45, 48, 58) });
+                    let phash_btn =
+                        Button::new(RichText::new("🔍 感知相似 (pHash)").color(if phash_active {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgb(205, 210, 225)
+                        }))
+                        .fill(if phash_active {
+                            ThemeColors::ACCENT
+                        } else {
+                            Color32::from_rgb(45, 48, 58)
+                        });
                     if ui.add(phash_btn).clicked() {
                         state.mode = DuplicateMode::SimilarPhash;
                     }
 
                     let md5_active = state.mode == DuplicateMode::ExactMd5;
-                    let md5_btn = Button::new(
-                        RichText::new("⚡ 精確重複 (MD5)")
-                            .color(if md5_active { Color32::WHITE } else { Color32::from_rgb(205, 210, 225) }),
-                    )
-                    .fill(if md5_active { ThemeColors::ACCENT } else { Color32::from_rgb(45, 48, 58) });
+                    let md5_btn =
+                        Button::new(RichText::new("⚡ 精確重複 (MD5)").color(if md5_active {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgb(205, 210, 225)
+                        }))
+                        .fill(if md5_active {
+                            ThemeColors::ACCENT
+                        } else {
+                            Color32::from_rgb(45, 48, 58)
+                        });
                     if ui.add(md5_btn).clicked() {
                         state.mode = DuplicateMode::ExactMd5;
                     }
@@ -606,30 +634,59 @@ impl DuplicateFinderDialog {
                 // 2. 門檻微調與操作按鈕列
                 ui.horizontal(|ui| {
                     if state.mode == DuplicateMode::SimilarPhash {
-                        ui.label(RichText::new("相似度門檻 (Hamming):").color(Color32::from_rgb(225, 225, 235)));
-                        ui.add(egui::Slider::new(&mut state.hamming_threshold, 0..=30).text(RichText::new("差距 ≤ 門檻判定為重複").color(Color32::from_rgb(180, 185, 200))));
+                        ui.label(
+                            RichText::new("相似度門檻 (Hamming):")
+                                .color(Color32::from_rgb(225, 225, 235)),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut state.hamming_threshold, 0..=30).text(
+                                RichText::new("差距 ≤ 門檻判定為重複")
+                                    .color(Color32::from_rgb(180, 185, 200)),
+                            ),
+                        );
                         ui.add_space(14.0);
                     }
 
                     // 開始掃描按鈕
-                    let scan_btn_text = if is_scanning { "⏳ 掃描中..." } else { "▶ 開始掃描" };
-                    let scan_btn = Button::new(RichText::new(scan_btn_text).strong().color(Color32::WHITE))
-                        .fill(if is_scanning { ThemeColors::BG_WIDGET } else { ThemeColors::ACCENT });
+                    let scan_btn_text = if is_scanning {
+                        "⏳ 掃描中..."
+                    } else {
+                        "▶ 開始掃描"
+                    };
+                    let scan_btn =
+                        Button::new(RichText::new(scan_btn_text).strong().color(Color32::WHITE))
+                            .fill(if is_scanning {
+                                ThemeColors::BG_WIDGET
+                            } else {
+                                ThemeColors::ACCENT
+                            });
 
-                    if ui.add_enabled(!is_scanning && state.target_dir.is_some(), scan_btn).clicked() {
+                    if ui
+                        .add_enabled(!is_scanning && state.target_dir.is_some(), scan_btn)
+                        .clicked()
+                    {
                         state.start_scan();
                     }
 
                     // 狀態與訊息
                     if let Some((msg, success)) = &state.delete_status_msg {
                         ui.add_space(12.0);
-                        let color = if *success { ThemeColors::SUCCESS } else { ThemeColors::WARNING };
+                        let color = if *success {
+                            ThemeColors::SUCCESS
+                        } else {
+                            ThemeColors::WARNING
+                        };
                         ui.label(RichText::new(msg).color(color).strong());
                     }
                 });
 
                 // 3. 掃描進度條
-                if let ScanStatus::Scanning { current, total, stage } = &state.status {
+                if let ScanStatus::Scanning {
+                    current,
+                    total,
+                    stage,
+                } = &state.status
+                {
                     ui.add_space(8.0);
                     let progress = if *total > 0 {
                         *current as f32 / *total as f32
@@ -667,13 +724,30 @@ impl DuplicateFinderDialog {
                         );
 
                         ui.add_space(12.0);
-                        if ui.button(RichText::new("✔ 保留每組首項 (勾選其餘)").color(Color32::from_rgb(240, 240, 245))).clicked() {
+                        if ui
+                            .button(
+                                RichText::new("✔ 保留每組首項 (勾選其餘)")
+                                    .color(Color32::from_rgb(240, 240, 245)),
+                            )
+                            .clicked()
+                        {
                             state.mark_all_duplicates_except_first();
                         }
-                        if ui.button(RichText::new("⭐ 保留畫質最高 (其餘勾選)").color(Color32::from_rgb(240, 240, 245))).clicked() {
+                        if ui
+                            .button(
+                                RichText::new("⭐ 保留畫質最高 (其餘勾選)")
+                                    .color(Color32::from_rgb(240, 240, 245)),
+                            )
+                            .clicked()
+                        {
                             state.mark_all_duplicates_keep_highest_resolution();
                         }
-                        if ui.button(RichText::new("✖ 清除勾選").color(Color32::from_rgb(240, 240, 245))).clicked() {
+                        if ui
+                            .button(
+                                RichText::new("✖ 清除勾選").color(Color32::from_rgb(240, 240, 245)),
+                            )
+                            .clicked()
+                        {
                             state.uncheck_all();
                         }
 
@@ -708,19 +782,30 @@ impl DuplicateFinderDialog {
                     // 左側欄：群組與檔案清單
                     cols[0].group(|ui| {
                         ui.set_max_height(available_height);
-                        ui.heading(RichText::new("📋 重複群組清單").size(14.0).color(ThemeColors::TEXT_SECONDARY));
+                        ui.heading(
+                            RichText::new("📋 重複群組清單")
+                                .size(14.0)
+                                .color(ThemeColors::TEXT_SECONDARY),
+                        );
                         ui.add_space(4.0);
 
                         if state.groups.is_empty() {
                             if matches!(state.status, ScanStatus::Completed { .. }) {
                                 ui.vertical_centered(|ui| {
                                     ui.add_space(40.0);
-                                    ui.label(RichText::new("🎉 太棒了！未發現任何重複圖片。").size(15.0).color(ThemeColors::SUCCESS));
+                                    ui.label(
+                                        RichText::new("🎉 太棒了！未發現任何重複圖片。")
+                                            .size(15.0)
+                                            .color(ThemeColors::SUCCESS),
+                                    );
                                 });
                             } else {
                                 ui.vertical_centered(|ui| {
                                     ui.add_space(40.0);
-                                    ui.label(RichText::new("請選擇資料夾並點擊「開始掃描」").color(ThemeColors::TEXT_MUTED));
+                                    ui.label(
+                                        RichText::new("請選擇資料夾並點擊「開始掃描」")
+                                            .color(ThemeColors::TEXT_MUTED),
+                                    );
                                 });
                             }
                         } else {
@@ -758,14 +843,28 @@ impl DuplicateFinderDialog {
 
                                         group_frame.show(ui, |ui| {
                                             ui.horizontal(|ui| {
-                                                let fold_icon = if state.groups[g_idx].is_expanded { "▼" } else { "▶" };
-                                                if ui.button(RichText::new(fold_icon).size(12.0).color(Color32::WHITE)).clicked() {
-                                                    state.groups[g_idx].is_expanded = !state.groups[g_idx].is_expanded;
+                                                let fold_icon = if state.groups[g_idx].is_expanded {
+                                                    "▼"
+                                                } else {
+                                                    "▶"
+                                                };
+                                                if ui
+                                                    .button(
+                                                        RichText::new(fold_icon)
+                                                            .size(12.0)
+                                                            .color(Color32::WHITE),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    state.groups[g_idx].is_expanded =
+                                                        !state.groups[g_idx].is_expanded;
                                                 }
 
                                                 let resp = ui.selectable_label(
                                                     is_active_group,
-                                                    RichText::new(header_title).strong().color(Color32::WHITE),
+                                                    RichText::new(header_title)
+                                                        .strong()
+                                                        .color(Color32::WHITE),
                                                 );
                                                 if resp.clicked() {
                                                     state.active_group_idx = Some(g_idx);
@@ -781,8 +880,10 @@ impl DuplicateFinderDialog {
                                                 ui.add_space(4.0);
                                                 let mut clicked_item_idx = None;
                                                 for item_idx in 0..state.groups[g_idx].items.len() {
-                                                    let is_selected_item = is_active_group && state.active_item_idx == Some(item_idx);
-                                                    let item_mut = &mut state.groups[g_idx].items[item_idx];
+                                                    let is_selected_item = is_active_group
+                                                        && state.active_item_idx == Some(item_idx);
+                                                    let item_mut =
+                                                        &mut state.groups[g_idx].items[item_idx];
 
                                                     let filename = item_mut
                                                         .path
@@ -791,11 +892,16 @@ impl DuplicateFinderDialog {
                                                         .to_string_lossy()
                                                         .to_string();
 
-                                                    let size_str = format!("{:.1} KB", item_mut.size_bytes as f64 / 1024.0);
+                                                    let size_str = format!(
+                                                        "{:.1} KB",
+                                                        item_mut.size_bytes as f64 / 1024.0
+                                                    );
                                                     let dim_str = item_mut
                                                         .dimensions
                                                         .map(|(w, h)| format!("{}x{}", w, h))
-                                                        .unwrap_or_else(|| "未知解析度".to_string());
+                                                        .unwrap_or_else(|| {
+                                                            "未知解析度".to_string()
+                                                        });
 
                                                     let is_del = item_mut.selected_for_delete;
                                                     let label_text = format!(
@@ -806,7 +912,10 @@ impl DuplicateFinderDialog {
                                                     ui.horizontal(|ui| {
                                                         ui.add_space(16.0);
                                                         // 刪除勾選框
-                                                        ui.checkbox(&mut item_mut.selected_for_delete, "");
+                                                        ui.checkbox(
+                                                            &mut item_mut.selected_for_delete,
+                                                            "",
+                                                        );
 
                                                         let item_resp = ui.selectable_label(
                                                             is_selected_item,
@@ -845,7 +954,13 @@ impl DuplicateFinderDialog {
                                 let ref_item = group.items[0].clone();
                                 let comp_idx = match state.active_item_idx {
                                     Some(idx) if idx < group.items.len() => idx,
-                                    _ => if group.items.len() > 1 { 1 } else { 0 },
+                                    _ => {
+                                        if group.items.len() > 1 {
+                                            1
+                                        } else {
+                                            0
+                                        }
+                                    }
                                 };
                                 let comp_item = group.items[comp_idx].clone();
                                 Some((ref_item, comp_item, comp_idx))
@@ -862,7 +977,11 @@ impl DuplicateFinderDialog {
                     // 右側欄：雙圖左右比對預覽視圖
                     cols[1].group(|ui| {
                         ui.set_max_height(available_height);
-                        ui.heading(RichText::new("🔍 左右比對預覽").size(14.0).color(ThemeColors::TEXT_SECONDARY));
+                        ui.heading(
+                            RichText::new("🔍 左右比對預覽")
+                                .size(14.0)
+                                .color(ThemeColors::TEXT_SECONDARY),
+                        );
                         ui.add_space(4.0);
 
                         ScrollArea::vertical()
@@ -873,7 +992,11 @@ impl DuplicateFinderDialog {
                                     ui.columns(2, |sub_cols| {
                                         // 左：基準圖
                                         sub_cols[0].group(|ui| {
-                                            ui.label(RichText::new("📌 基準圖 (項 1)").strong().color(ThemeColors::ACCENT));
+                                            ui.label(
+                                                RichText::new("📌 基準圖 (項 1)")
+                                                    .strong()
+                                                    .color(ThemeColors::ACCENT),
+                                            );
                                             render_preview_card(
                                                 ctx,
                                                 ui,
@@ -890,7 +1013,11 @@ impl DuplicateFinderDialog {
                                             } else {
                                                 format!("🔍 比對圖 (項 {})", comp_idx + 1)
                                             };
-                                            ui.label(RichText::new(title).strong().color(ThemeColors::ACCENT_HOVER));
+                                            ui.label(
+                                                RichText::new(title)
+                                                    .strong()
+                                                    .color(ThemeColors::ACCENT_HOVER),
+                                            );
                                             render_preview_card(
                                                 ctx,
                                                 ui,
@@ -906,13 +1033,33 @@ impl DuplicateFinderDialog {
                                     ui.add_space(4.0);
 
                                     // 詳細路徑比對 (高對比清楚區分兩條路徑)
-                                    ui.label(RichText::new("路徑詳細比對：").strong().color(Color32::WHITE));
-                                    ui.label(RichText::new(format!("基準: {}", ref_item.path.display())).monospace().size(11.0).color(Color32::from_rgb(147, 197, 253)));
-                                    ui.label(RichText::new(format!("比對: {}", comp_item.path.display())).monospace().size(11.0).color(Color32::from_rgb(253, 224, 71)));
+                                    ui.label(
+                                        RichText::new("路徑詳細比對：")
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!("基準: {}", ref_item.path.display()))
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(Color32::from_rgb(147, 197, 253)),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "比對: {}",
+                                            comp_item.path.display()
+                                        ))
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(Color32::from_rgb(253, 224, 71)),
+                                    );
                                 } else {
                                     ui.vertical_centered(|ui| {
                                         ui.add_space(40.0);
-                                        ui.label(RichText::new("點擊左側任一重複群組進行雙圖預覽比對").color(ThemeColors::TEXT_MUTED));
+                                        ui.label(
+                                            RichText::new("點擊左側任一重複群組進行雙圖預覽比對")
+                                                .color(ThemeColors::TEXT_MUTED),
+                                        );
                                     });
                                 }
                             });
@@ -941,13 +1088,22 @@ impl DuplicateFinderDialog {
                 )
                 .show(ctx, |ui| {
                     ui.vertical_centered(|ui| {
-                        ui.label(RichText::new("🗑 安全刪除確認").size(18.0).strong().color(Color32::from_rgb(239, 68, 68)));
+                        ui.label(
+                            RichText::new("🗑 安全刪除確認")
+                                .size(18.0)
+                                .strong()
+                                .color(Color32::from_rgb(239, 68, 68)),
+                        );
                         ui.add_space(8.0);
                         ui.label(format!(
                             "您即將將 {} 個選取的重複檔案（共約 {:.2} MB）\n移至系統資源回收桶。",
                             del_count, mb
                         ));
-                        ui.label(RichText::new("檔案不會永久消失，您隨時可從回收桶還原。").size(11.0).color(ThemeColors::TEXT_MUTED));
+                        ui.label(
+                            RichText::new("檔案不會永久消失，您隨時可從回收桶還原。")
+                                .size(11.0)
+                                .color(ThemeColors::TEXT_MUTED),
+                        );
                         ui.add_space(14.0);
 
                         ui.horizontal(|ui| {
@@ -955,8 +1111,12 @@ impl DuplicateFinderDialog {
                                 state.show_confirm_delete = false;
                             }
                             ui.add_space(20.0);
-                            let confirm_btn = Button::new(RichText::new("確定移至回收桶").strong().color(Color32::WHITE))
-                                .fill(Color32::from_rgb(220, 38, 38));
+                            let confirm_btn = Button::new(
+                                RichText::new("確定移至回收桶")
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(220, 38, 38));
                             if ui.add(confirm_btn).clicked() {
                                 state.execute_safe_delete();
                             }
@@ -977,11 +1137,7 @@ fn render_preview_card(
     item: &DuplicateItemUi,
     navigate_to_path: &mut Option<PathBuf>,
 ) {
-    let filename = item
-        .path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
+    let filename = item.path.file_name().unwrap_or_default().to_string_lossy();
 
     ui.label(RichText::new(filename).strong().color(Color32::WHITE));
 
@@ -991,8 +1147,16 @@ fn render_preview_card(
         .unwrap_or_else(|| "未知".to_string());
     let size_str = format!("{:.2} KB", item.size_bytes as f64 / 1024.0);
 
-    ui.label(RichText::new(format!("解析度: {}", dim_str)).size(11.0).color(Color32::from_rgb(215, 220, 230)));
-    ui.label(RichText::new(format!("大小: {}", size_str)).size(11.0).color(Color32::from_rgb(215, 220, 230)));
+    ui.label(
+        RichText::new(format!("解析度: {}", dim_str))
+            .size(11.0)
+            .color(Color32::from_rgb(215, 220, 230)),
+    );
+    ui.label(
+        RichText::new(format!("大小: {}", size_str))
+            .size(11.0)
+            .color(Color32::from_rgb(215, 220, 230)),
+    );
 
     ui.add_space(6.0);
 
@@ -1000,8 +1164,13 @@ fn render_preview_card(
     let preview_size = vec2(ui.available_width().max(100.0), 140.0);
     let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
 
-    ui.painter().rect_filled(rect, Rounding::same(6.0), ThemeColors::BG_CANVAS);
-    ui.painter().rect_stroke(rect, Rounding::same(6.0), Stroke::new(1.0, ThemeColors::BORDER));
+    ui.painter()
+        .rect_filled(rect, Rounding::same(6.0), ThemeColors::BG_CANVAS);
+    ui.painter().rect_stroke(
+        rect,
+        Rounding::same(6.0),
+        Stroke::new(1.0, ThemeColors::BORDER),
+    );
 
     if let Some(tex) = state.get_or_load_preview(ctx, &item.path) {
         // 計算保持長寬比居中縮放

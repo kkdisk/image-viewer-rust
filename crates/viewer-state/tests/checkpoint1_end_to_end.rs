@@ -1,7 +1,7 @@
 //! Checkpoint 1 端到端整合測試
 //! 驗證無 UI 狀態下：載入 → 微調 → 提交歷史 → Undo/Redo → 原子寫檔之完整流程
 
-use core_image::{load_image, save_image_atomic, AdjustmentParams};
+use core_image::{AdjustmentParams, load_image, save_image_atomic};
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
 use tempfile::tempdir;
 use viewer_state::EditingSession;

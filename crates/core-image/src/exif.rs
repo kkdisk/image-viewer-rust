@@ -4,8 +4,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Seek, SeekFrom};
 use std::path::Path;
 
-use image::DynamicImage;
 use exif::{In, Reader, Tag, Value};
+use image::DynamicImage;
 
 /// 自輸入流中嘗試讀取 EXIF Orientation 標籤（數值通常介於 1 至 8）
 ///

@@ -1,11 +1,11 @@
 //! Checkpoint 3: 編輯與比對功能端到端整合測試
 //! 驗證：載入 → 微調預覽 → 雙圖比對同步 → 套用歷史 → Undo/Redo → 原子存檔
 
-use std::fs;
 use app_ui::app::ImageViewerApp;
 use app_ui::canvas::ComparisonSource;
 use core_image::AdjustmentParams;
 use image::{ImageBuffer, Rgba};
+use std::fs;
 
 #[test]
 fn test_checkpoint3_editing_and_comparison_lifecycle() {
@@ -44,7 +44,12 @@ fn test_checkpoint3_editing_and_comparison_lifecycle() {
     assert!(app.comparison.sync_viewport);
 
     // 驗證原圖與目前微調兩側像素之差異
-    let orig_p = app.session.as_ref().unwrap().original_image().get_pixel(0, 0)[0];
+    let orig_p = app
+        .session
+        .as_ref()
+        .unwrap()
+        .original_image()
+        .get_pixel(0, 0)[0];
     let curr_p = app.session.as_ref().unwrap().active_image().get_pixel(0, 0)[0];
     assert_eq!(orig_p, 100);
     assert_eq!(curr_p, 150);
@@ -66,12 +71,18 @@ fn test_checkpoint3_editing_and_comparison_lifecycle() {
 
     // 5. 測試 Undo / Redo
     app.undo();
-    assert_eq!(app.session.as_ref().unwrap().active_image().get_pixel(0, 0)[0], 100);
+    assert_eq!(
+        app.session.as_ref().unwrap().active_image().get_pixel(0, 0)[0],
+        100
+    );
     assert!(!app.session.as_ref().unwrap().can_undo());
     assert!(app.session.as_ref().unwrap().can_redo());
 
     app.redo();
-    assert_eq!(app.session.as_ref().unwrap().active_image().get_pixel(0, 0)[0], 150);
+    assert_eq!(
+        app.session.as_ref().unwrap().active_image().get_pixel(0, 0)[0],
+        150
+    );
     assert!(app.session.as_ref().unwrap().can_undo());
 
     // 6. 原地原子存檔

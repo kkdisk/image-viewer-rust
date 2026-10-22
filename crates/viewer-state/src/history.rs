@@ -1,7 +1,7 @@
 //! In-Memory 影像歷程管理與零磁碟 I/O 快照 Undo/Redo
 
-use std::sync::Arc;
 use image::RgbaImage;
+use std::sync::Arc;
 
 /// 預設 Undo 歷史上限步數
 pub const DEFAULT_MAX_HISTORY_STEPS: usize = 20;

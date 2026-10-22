@@ -1,6 +1,6 @@
-use std::fs;
 use core_image::AdjustmentParams;
 use image::{ImageBuffer, Rgba};
+use std::fs;
 
 #[test]
 fn test_app_undo_redo_and_atomic_save() {

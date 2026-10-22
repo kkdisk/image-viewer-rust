@@ -1,8 +1,8 @@
 //! 微調防抖與 Latest-Only 排程測試
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 

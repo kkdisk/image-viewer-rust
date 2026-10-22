@@ -1,8 +1,8 @@
 //! 單元與整合測試：EXIF 方向校正與像素安全保護限制
 
 use core_image::{
-    apply_orientation, check_pixel_limit, inspect_dimensions_from_memory,
-    load_image_from_memory, load_image_from_memory_with_limit, ImageError, MAX_SAFE_PIXELS,
+    ImageError, MAX_SAFE_PIXELS, apply_orientation, check_pixel_limit,
+    inspect_dimensions_from_memory, load_image_from_memory, load_image_from_memory_with_limit,
 };
 use image::{DynamicImage, GenericImageView, ImageFormat, Rgb, RgbImage, Rgba};
 use std::io::Cursor;

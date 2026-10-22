@@ -1,8 +1,8 @@
-use std::fs;
-use std::sync::Arc;
 use app_ui::app::ImageViewerApp;
 use app_ui::canvas::ComparisonSource;
 use image::{ImageBuffer, Rgba};
+use std::fs;
+use std::sync::Arc;
 
 #[test]
 fn test_side_by_side_comparison_toggle_and_sync() {

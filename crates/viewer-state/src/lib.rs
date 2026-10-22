@@ -4,7 +4,7 @@ pub mod history;
 pub mod session;
 pub mod viewport;
 
-pub use history::{HistoryManager, HistoryNode, DEFAULT_MAX_HISTORY_STEPS};
+pub use history::{DEFAULT_MAX_HISTORY_STEPS, HistoryManager, HistoryNode};
 pub use session::EditingSession;
 pub use viewport::ViewportState;
 

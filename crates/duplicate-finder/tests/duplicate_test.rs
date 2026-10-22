@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use duplicate_finder::{
-    batch_compute_hashes, compute_md5, compute_phash, compute_phash_from_image,
-    find_exact_md5_groups, find_similar_groups, hamming_distance, UnionFind, DEFAULT_HASH_SIZE,
+    DEFAULT_HASH_SIZE, UnionFind, batch_compute_hashes, compute_md5, compute_phash,
+    compute_phash_from_image, find_exact_md5_groups, find_similar_groups, hamming_distance,
 };
 use image::{DynamicImage, ImageBuffer, Rgba};
 
@@ -80,10 +80,7 @@ fn test_md5_and_phash_computation() {
     assert!(batch_res[1].1.is_ok());
 
     // MD5 精確分群測試
-    let md5_entries = vec![
-        (img_path1.clone(), md5_1),
-        (img_path2.clone(), md5_2),
-    ];
+    let md5_entries = vec![(img_path1.clone(), md5_1), (img_path2.clone(), md5_2)];
     let exact_groups = find_exact_md5_groups(&md5_entries);
     assert_eq!(exact_groups.len(), 1);
     assert_eq!(exact_groups[0].items.len(), 2);

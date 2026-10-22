@@ -6,10 +6,10 @@ pub mod union_find;
 
 pub use error::DuplicateError;
 pub use hashing::{
-    batch_compute_hashes, compute_md5, compute_phash, compute_phash_from_image, DEFAULT_HASH_SIZE,
+    DEFAULT_HASH_SIZE, batch_compute_hashes, compute_md5, compute_phash, compute_phash_from_image,
 };
 pub use union_find::{
-    find_exact_md5_groups, find_similar_groups, hamming_distance, DuplicateGroup, UnionFind,
+    DuplicateGroup, UnionFind, find_exact_md5_groups, find_similar_groups, hamming_distance,
 };
 
 pub fn version() -> &'static str {

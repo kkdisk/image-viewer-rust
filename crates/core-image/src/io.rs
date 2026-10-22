@@ -115,10 +115,7 @@ pub fn save_image_atomic<P: AsRef<Path>>(
     // 由目標路徑推斷影像格式，未指定時預設為 PNG
     let format = ImageFormat::from_path(target).unwrap_or(ImageFormat::Png);
 
-    let ext = target
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("tmp");
+    let ext = target.extension().and_then(|s| s.to_str()).unwrap_or("tmp");
 
     // 在同目錄下建立具備唯一名稱的暫存檔案
     let mut temp_file = Builder::new()

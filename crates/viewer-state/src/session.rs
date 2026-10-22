@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use core_image::{apply_adjustments_rgba, AdjustmentParams};
+use core_image::{AdjustmentParams, apply_adjustments_rgba};
 use image::RgbaImage;
 
 use crate::history::HistoryManager;

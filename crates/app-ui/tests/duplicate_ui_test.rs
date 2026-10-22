@@ -1,6 +1,6 @@
-use std::fs;
 use app_ui::panels::{DuplicateFinderState, DuplicateGroupUi, DuplicateItemUi};
 use image::{ImageBuffer, Rgba};
+use std::fs;
 
 #[test]
 fn test_duplicate_finder_state_selection_and_deletion() {

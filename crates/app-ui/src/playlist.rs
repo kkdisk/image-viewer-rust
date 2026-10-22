@@ -4,9 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 支援的圖片副檔名清單（小寫）
-pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "bmp", "webp", "tiff", "tif", "gif",
-];
+pub const SUPPORTED_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "tif", "gif"];
 
 /// 檢查路徑是否為支援的圖片格式
 pub fn is_supported_image(path: &Path) -> bool {
@@ -62,7 +61,9 @@ impl ImagePlaylist {
         });
 
         // 定位當前檔案之索引
-        let normalized_current = current_file.canonicalize().unwrap_or_else(|_| current_file.to_path_buf());
+        let normalized_current = current_file
+            .canonicalize()
+            .unwrap_or_else(|_| current_file.to_path_buf());
         let current_idx = image_files.iter().position(|p| {
             p.canonicalize().unwrap_or_else(|_| p.clone()) == normalized_current
                 || p == current_file
