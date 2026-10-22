@@ -55,6 +55,12 @@ v0.3.1 起使用 Windows runner 與固定 Rust 1.99.1；下段原有「穩定版
 
 本輪重建成功：執行檔 6,653,440 位元組，包含完整 v0.3.1 版本文字；重新封裝 ZIP 為 3,236,526 位元組，SHA-256 為 `fd449b3779a9730194cb21ab6b4e87f70b524948edd864a87827293e8b7a7e2e`。已核對 ZIP 僅含本次執行檔，內部執行檔 SHA-256 與建置檔一致，檢查碼附檔與 ZIP 一致。不同建置產物不可只以相同長度判斷內容一致。
 
+### v0.3.1 遠端完成證據
+
+發布提交 `8121b3f1d0e02ae07f2fb51a4ff73a97ae6dafec` 的 [main CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/39780206671) 已成功，下載日誌確認 92 項通過、1 項忽略；[標籤 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/39781163318) 的品質與建立草稿工作均成功，補足本機完整重驗受原則阻擋的證據。
+
+[Release 草稿](https://github.com/kkdisk/image-viewer-rust/releases/tag/untagged-e5e398f633974d4f1361) 編號 420721832，`draft: true`。遠端 ZIP 為 3,316,292 位元組，SHA-256 為 `b0dc6e339257d9a0d4f77be09de276dfc7dd4cf22cabeb75a0b882b6042efbce`，已實際下載並與 API 摘要及 `.sha256` 附檔核對一致。ZIP 只含 `app-ui.exe`，長度 6,651,392 位元組，含完整 `版本 v0.3.1 (Rust 2024 Edition)`；未執行下載內容。此為 CI 產物，與本機重建產物分別記錄，不推論位元組應相同。原生桌面驗收尚未完成，草稿未公開。
+
 - 開啟大圖、快速連續切換、載入參考圖時確認視窗持續回應，最後顯示最新請求；失敗後舊圖仍可編輯。
 - 載入期間修改目前圖片，確認新圖交付前要求處理未儲存變更。
 - 儲存期間切圖與編輯暫停；選擇儲存並離開時，必須等寫入成功才切圖或關閉。取消另存及寫入失敗均保留工作。
