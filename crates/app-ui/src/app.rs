@@ -20,6 +20,11 @@ use crate::thumbnail_loader::ThumbnailManager;
 
 /// 主圖片瀏覽與編輯桌面應用狀態
 pub struct ImageViewerApp {
+    pub(crate) leave_guard: crate::navigation_guard::LeaveGuard,
+    pub(crate) document_io: crate::document_io::DocumentIo,
+    pub(crate) preferences: crate::preferences::PreferenceState,
+    pub white_balance_open: bool,
+    pub fine_tune_open: bool,
     /// 圖片編輯 Session
     pub session: Option<EditingSession>,
     /// 視口縮放與平移狀態
@@ -44,6 +49,7 @@ pub struct ImageViewerApp {
     pub slider_params: AdjustmentParams,
     /// 像素微調防抖背景運算排程器
     pub debouncer: AdjustmentDebouncer,
+    pending_adjustment: Option<u64>,
     /// 雙圖比對視圖配置
     pub comparison: ComparisonConfig,
     /// 雙圖比對時左側獨立視口（當未開啟同步時使用）
@@ -93,6 +99,11 @@ pub struct ImageViewerApp {
 impl Default for ImageViewerApp {
     fn default() -> Self {
         Self {
+            leave_guard: crate::navigation_guard::LeaveGuard::default(),
+            document_io: crate::document_io::DocumentIo::default(),
+            preferences: crate::preferences::PreferenceState::default(),
+            white_balance_open: true,
+            fine_tune_open: true,
             session: None,
             viewport: ViewportState::new(),
             show_side_panel: true,
@@ -105,6 +116,7 @@ impl Default for ImageViewerApp {
             thumbnail_manager: ThumbnailManager::new(),
             slider_params: AdjustmentParams::default(),
             debouncer: AdjustmentDebouncer::new(),
+            pending_adjustment: None,
             comparison: ComparisonConfig::default(),
             left_viewport: ViewportState::new(),
             original_texture: None,
@@ -142,7 +154,12 @@ impl ImageViewerApp {
 
     /// 開啟指定路徑之影像或壓縮檔（.zip / .7z）
     pub fn open_file_path(&mut self, path: PathBuf) -> Result<(), String> {
-        self.cancel_archive_loading();
+        if self.is_saving() {
+            return Err("儲存進行中，請稍候再開啟檔案".into());
+        }
+        if self.has_pending_leave() {
+            return Ok(());
+        }
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
@@ -150,6 +167,7 @@ impl ImageViewerApp {
             .unwrap_or_default();
 
         if ext == "zip" || ext == "7z" {
+            self.cancel_archive_loading();
             let filename = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -163,17 +181,6 @@ impl ImageViewerApp {
             self.latest_archive_req_id = self.archive_loader.load_archive(path, None);
             Ok(())
         } else {
-            // 若為一般圖片檔案
-            let is_in_archive = self
-                .archive_session
-                .as_ref()
-                .map(|arc| arc.is_from_archive(&path))
-                .unwrap_or(false);
-
-            if !is_in_archive {
-                self.archive_session = None;
-            }
-
             self.open_image_path(path)
                 .map_err(|e| format!("無法載入圖片: {}", e))
         }
@@ -207,19 +214,28 @@ impl ImageViewerApp {
         &mut self,
         session: core_archive::ManagedArchiveSession,
     ) -> Result<(), String> {
+        if self.has_pending_leave() {
+            return Ok(());
+        }
+        if self.has_unsaved_changes() {
+            self.defer_leave(crate::navigation_guard::LeaveAction::Archive(session));
+            return Ok(());
+        }
+        self.apply_archive_session_unchecked(session)
+    }
+
+    pub(crate) fn apply_archive_session_unchecked(
+        &mut self,
+        session: core_archive::ManagedArchiveSession,
+    ) -> Result<(), String> {
         let first_img = session
             .image_paths
             .first()
             .cloned()
             .ok_or_else(|| "壓縮檔內未找到支援的圖片".to_string())?;
 
-        self.playlist.set_custom_list(session.image_paths.clone());
-        self.thumbnail_manager.clear();
-        self.archive_session = Some(session);
-
-        self.open_image_path(first_img)
-            .map_err(|e| format!("無法載入壓縮檔內圖片: {}", e))?;
-        Ok(())
+        self.cancel_archive_loading();
+        self.enqueue_image(first_img, Some(session), false)
     }
 
     /// 輪詢背景壓縮檔解壓結果並更新應用狀態（回傳是否有狀態變更）
@@ -243,7 +259,11 @@ impl ImageViewerApp {
                         self.archive_password_error = None;
                         self.archive_password_input.clear();
                         self.status_notification = Some((
-                            format!("已解壓載入壓縮檔 (共 {} 張圖片)", count),
+                            if self.has_pending_leave() {
+                                "解壓完成，等待處理目前未儲存的變更".to_owned()
+                            } else {
+                                format!("已解壓載入壓縮檔 (共 {} 張圖片)", count)
+                            },
                             std::time::Instant::now(),
                         ));
                     }
@@ -284,7 +304,8 @@ impl ImageViewerApp {
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
             self.poll_archive_loader();
-            if self.received_archive_req_id >= target_id {
+            self.poll_document_io();
+            if self.received_archive_req_id >= target_id && !self.io_needs_repaint() {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -294,26 +315,44 @@ impl ImageViewerApp {
 
     /// 開啟指定路徑之影像，並視情況維護播放清單
     pub fn open_image_path(&mut self, path: PathBuf) -> Result<(), core_image::ImageError> {
-        self.cancel_archive_loading();
-        let dyn_img = core_image::load_image(&path)?;
-        let rgba = dyn_img.to_rgba8();
-
-        // 若不是清單內切換，則更新目錄掃描
-        if !self.playlist.try_select_existing(&path) {
-            let current_dir = path.parent();
-            let prev_dir = self
-                .session
-                .as_ref()
-                .and_then(|s| s.source_path())
-                .and_then(|p| p.parent());
-
-            if current_dir != prev_dir {
-                self.thumbnail_manager.clear();
-            }
-            self.playlist.scan_from_file(&path);
+        if self.defer_leave(crate::navigation_guard::LeaveAction::Image(path.clone())) {
+            return Ok(());
         }
+        self.open_image_path_unchecked(path)
+    }
 
-        self.session = Some(EditingSession::new(rgba, Some(path)));
+    pub(crate) fn open_image_path_unchecked(
+        &mut self,
+        path: PathBuf,
+    ) -> Result<(), core_image::ImageError> {
+        self.cancel_archive_loading();
+        self.enqueue_image(path, None, false)
+            .map_err(|error| core_image::ImageError::Io(std::io::Error::other(error)))
+    }
+
+    pub(crate) fn install_loaded_image(&mut self, loaded: crate::document_io::LoadedImage) {
+        if loaded.reference {
+            self.reference_image = Some(Arc::new(loaded.pixels));
+            self.reference_texture = None;
+            self.comparison.reference_path = Some(loaded.path);
+            self.comparison.source = ComparisonSource::Reference;
+            self.comparison.is_active = true;
+            return;
+        }
+        if let Some(archive) = loaded.archive {
+            self.archive_session = Some(archive);
+        } else if !self
+            .archive_session
+            .as_ref()
+            .is_some_and(|archive| archive.is_from_archive(&loaded.path))
+        {
+            self.archive_session = None;
+        }
+        self.debouncer.cancel_pending();
+        self.pending_adjustment = None;
+        self.thumbnail_manager.clear();
+        self.playlist = loaded.playlist;
+        self.session = Some(EditingSession::new(loaded.pixels, Some(loaded.path)));
         self.slider_params = AdjustmentParams::default();
         self.viewport.reset_fit_window();
         self.left_viewport = self.viewport;
@@ -322,11 +361,13 @@ impl ImageViewerApp {
         self.reference_texture = None;
         self.reference_image = None;
         self.comparison.reference_path = None;
-        Ok(())
+        self.document_io.cancel_reference();
+        self.status_notification = Some(("圖片已載入".into(), std::time::Instant::now()));
     }
 
     /// 新開檔、導覽或取消時讓所有舊背景結果失效
     pub fn cancel_archive_loading(&mut self) {
+        self.document_io.cancel_main();
         self.latest_archive_req_id = 0;
         self.pending_archive_path = None;
         self.show_password_dialog = false;
@@ -368,16 +409,13 @@ impl ImageViewerApp {
             .add_filter("所有檔案 (*.*)", &["*"])
             .pick_file();
 
-        if let Some(path) = file
-            && let Ok(dyn_img) = core_image::load_image(&path)
-        {
-            let rgba = dyn_img.to_rgba8();
-            self.reference_image = Some(Arc::new(rgba));
-            self.reference_texture = None;
-            self.comparison.reference_path = Some(path);
-            self.comparison.source = ComparisonSource::Reference;
-            self.comparison.is_active = true;
+        if let Some(path) = file {
+            let _ = self.open_reference_image_path(path);
         }
+    }
+
+    pub fn open_reference_image_path(&mut self, path: PathBuf) -> Result<(), String> {
+        self.enqueue_image(path, None, true)
     }
 
     /// 切換雙圖分割比對模式
@@ -390,22 +428,34 @@ impl ImageViewerApp {
 
     /// 切換至上一張圖片
     pub fn navigate_prev(&mut self) {
-        if let Some(path) = self.playlist.prev() {
-            let _ = self.open_image_path(path);
+        if !self.playlist.is_empty() {
+            let index = self
+                .document_io
+                .intended_index(&self.playlist)
+                .map(|i| (i + self.playlist.len() - 1) % self.playlist.len())
+                .unwrap_or(0);
+            self.navigate_to(index);
         }
     }
 
     /// 切換至下一張圖片
     pub fn navigate_next(&mut self) {
-        if let Some(path) = self.playlist.next() {
-            let _ = self.open_image_path(path);
+        if !self.playlist.is_empty() {
+            let index = self
+                .document_io
+                .intended_index(&self.playlist)
+                .map(|i| (i + 1) % self.playlist.len())
+                .unwrap_or(0);
+            self.navigate_to(index);
         }
     }
 
     /// 切換至指定索引之圖片
     pub fn navigate_to(&mut self, index: usize) {
-        if let Some(path) = self.playlist.jump_to(index) {
-            let _ = self.open_image_path(path);
+        if let Some(path) = self.playlist.files().get(index).cloned()
+            && let Err(error) = self.open_image_path(path)
+        {
+            self.status_notification = Some((error.to_string(), std::time::Instant::now()));
         }
     }
 
@@ -502,8 +552,32 @@ impl ImageViewerApp {
         }
     }
 
+    /// 僅在背景預覽完成後套用，並同步重設介面參數。
+    pub fn apply_current_adjustments(&mut self) -> bool {
+        if self.is_saving() {
+            return false;
+        }
+        if self.pending_adjustment.is_some() || self.debouncer.is_computing() {
+            return false;
+        }
+        let applied = self
+            .session
+            .as_mut()
+            .is_some_and(|session| session.apply_adjustments());
+        if applied {
+            self.slider_params = AdjustmentParams::default();
+            self.debouncer.cancel_pending();
+        }
+        applied
+    }
+
     /// 復原上一動作
     pub fn undo(&mut self) {
+        if self.is_saving() {
+            return;
+        }
+        self.debouncer.cancel_pending();
+        self.pending_adjustment = None;
         if let Some(session) = &mut self.session
             && session.undo()
         {
@@ -513,6 +587,11 @@ impl ImageViewerApp {
 
     /// 重做下一動作
     pub fn redo(&mut self) {
+        if self.is_saving() {
+            return;
+        }
+        self.debouncer.cancel_pending();
+        self.pending_adjustment = None;
         if let Some(session) = &mut self.session
             && session.redo()
         {
@@ -534,47 +613,53 @@ impl ImageViewerApp {
         false
     }
 
-    /// 將目前影像原子寫入指定目標路徑並更新狀態
+    /// 提交原子寫檔；回傳是否已排程，實際成功由背景交付確認。
     pub fn save_image_to(&mut self, target_path: &std::path::Path) -> bool {
-        if let Some(session) = &mut self.session {
-            let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
-            if core_image::save_image_atomic(&dyn_img, target_path).is_ok() {
-                session.set_source_path(target_path.to_path_buf());
-                session.mark_saved();
-                self.playlist.scan_from_file(target_path);
-                return true;
-            }
+        if !self.can_save_committed_image() {
+            return false;
         }
-        false
+        if self
+            .archive_session
+            .as_ref()
+            .is_some_and(|archive| archive.is_from_archive(target_path))
+        {
+            self.status_notification = Some((
+                "壓縮檔內圖片必須另存至外部位置".into(),
+                std::time::Instant::now(),
+            ));
+            return false;
+        }
+        self.enqueue_save(target_path.to_path_buf())
     }
 
     /// 原地原子儲存已提交之影像
     pub fn save_current_image(&mut self) -> bool {
-        if self.is_current_image_from_archive() {
-            // 若當前檔案來自壓縮包，嚴禁原地覆寫，強制導向另存新檔！
-            self.save_image_as_dialog();
+        if !self.can_save_committed_image() {
             return false;
         }
-
-        if let Some(session) = &mut self.session {
-            if let Some(path) = session.source_path().map(|p| p.to_path_buf()) {
-                let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
-                if core_image::save_image_atomic(&dyn_img, &path).is_ok() {
-                    session.mark_saved();
-                    return true;
-                }
-            } else {
-                // 若無來源路徑則轉為另存新檔
-                self.save_image_as_dialog();
-                return false;
-            }
+        if self.is_current_image_from_archive() {
+            // 若當前檔案來自壓縮包，嚴禁原地覆寫，強制導向另存新檔！
+            return self.save_image_as_dialog();
         }
-        false
+
+        if let Some(path) = self
+            .session
+            .as_ref()
+            .and_then(|s| s.source_path())
+            .map(|p| p.to_path_buf())
+        {
+            self.save_image_to(&path)
+        } else {
+            self.save_image_as_dialog()
+        }
     }
 
     /// 彈出原生對話框另存新檔
-    pub fn save_image_as_dialog(&mut self) {
-        if let Some(session) = &mut self.session {
+    pub fn save_image_as_dialog(&mut self) -> bool {
+        if !self.can_save_committed_image() {
+            return false;
+        }
+        if let Some(session) = &self.session {
             let dialog = rfd::FileDialog::new()
                 .add_filter("PNG 影像 (*.png)", &["png"])
                 .add_filter("JPEG 影像 (*.jpg, *.jpeg)", &["jpg", "jpeg"])
@@ -593,19 +678,32 @@ impl ImageViewerApp {
             };
 
             if let Some(target_path) = dialog.save_file() {
-                let dyn_img = image::DynamicImage::ImageRgba8((*session.committed_image()).clone());
-                if core_image::save_image_atomic(&dyn_img, &target_path).is_ok() {
-                    session.set_source_path(target_path.clone());
-                    session.mark_saved();
-                    // 若新檔案加入目錄，更新 playlist
-                    self.playlist.scan_from_file(&target_path);
-                }
+                return self.save_image_to(&target_path);
             }
         }
+        false
+    }
+
+    fn can_save_committed_image(&mut self) -> bool {
+        let preview = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.has_active_preview())
+            || !self.slider_params.is_identity();
+        if preview {
+            self.status_notification = Some((
+                "請先套用或取消預覽，再儲存圖片".into(),
+                std::time::Instant::now(),
+            ));
+        }
+        self.session.is_some() && !preview
     }
 
     /// 處理鍵盤快捷鍵
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.has_pending_leave() {
+            return;
+        }
         let mut do_prev = false;
         let mut do_next = false;
         let mut do_first = false;
@@ -726,22 +824,36 @@ impl ImageViewerApp {
             self.navigate_next();
         }
         if do_first {
-            let first_path = self.playlist.first();
-            if let Some(path) = first_path {
-                let _ = self.open_image_path(path);
-            }
+            self.navigate_to(0);
         }
-        if do_last {
-            let last_path = self.playlist.last();
-            if let Some(path) = last_path {
-                let _ = self.open_image_path(path);
-            }
+        if do_last && let Some(last) = self.playlist.len().checked_sub(1) {
+            self.navigate_to(last);
         }
     }
 }
 
 impl eframe::App for ImageViewerApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.preferences.flush();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_preferences(ctx);
+        self.poll_document_io();
+        if self.io_needs_repaint() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        if self.leave_guard.close_confirmed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if ctx.input(|i| i.viewport().close_requested()) && !self.request_close() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+        if self.has_pending_leave() || self.is_saving() {
+            self.show_guarded_editor(ctx);
+            return;
+        }
         // 0. 更新視窗標題（帶未儲存星號 *）
         let title = match &self.session {
             Some(sess) => {
@@ -770,11 +882,15 @@ impl eframe::App for ImageViewerApp {
 
         // 3. 輪詢背景微調防抖計算結果
         if let Some(res) = self.debouncer.poll() {
+            self.pending_adjustment = None;
             let params = self.slider_params;
             if let Some(sess) = &mut self.session {
                 sess.set_preview_image(res.adjusted_image, params);
                 ctx.request_repaint();
             }
+        }
+        if self.pending_adjustment.is_some() || self.debouncer.is_computing() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
 
         // 3.1 輪詢背景壓縮檔解壓結果 (非同步響應，UI 零卡頓)
@@ -810,7 +926,14 @@ impl eframe::App for ImageViewerApp {
                 crate::panels::MenuAction::Save => {
                     self.save_current_image();
                 }
-                crate::panels::MenuAction::SaveAs => self.save_image_as_dialog(),
+                crate::panels::MenuAction::SaveAs => {
+                    self.save_image_as_dialog();
+                }
+                crate::panels::MenuAction::Exit => {
+                    if self.request_close() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
                 crate::panels::MenuAction::Undo => self.undo(),
                 crate::panels::MenuAction::Redo => self.redo(),
                 crate::panels::MenuAction::Reset100 => self.viewport.reset_actual_size(),
@@ -826,6 +949,11 @@ impl eframe::App for ImageViewerApp {
                 }
                 crate::panels::MenuAction::About => self.show_about_dialog = true,
             }
+        }
+
+        if self.has_pending_leave() || self.is_saving() {
+            self.show_guarded_editor(ctx);
+            return;
         }
 
         // 6. 底部狀態列
@@ -846,7 +974,9 @@ impl eframe::App for ImageViewerApp {
             .current_index()
             .map(|idx| (idx, self.playlist.len()));
 
-        let status_msg = if let Some((msg, ts)) = &self.status_notification {
+        let status_msg = if self.is_loading_image() {
+            Some("正在背景載入圖片…")
+        } else if let Some((msg, ts)) = &self.status_notification {
             if ts.elapsed().as_secs() < 8 {
                 Some(msg.as_str())
             } else {
@@ -891,12 +1021,19 @@ impl eframe::App for ImageViewerApp {
             self.navigate_next();
         }
 
+        if self.has_pending_leave() {
+            self.show_guarded_editor(ctx);
+            return;
+        }
+
         // 8. 側邊微調面板
         let has_image = self.session.is_some();
-        let is_computing = self.debouncer.is_computing();
+        let is_computing = self.pending_adjustment.is_some() || self.debouncer.is_computing();
         let mut adjustment_action = None;
 
         let mut adj_state = AdjustmentPanelState {
+            white_balance_open: &mut self.white_balance_open,
+            fine_tune_open: &mut self.fine_tune_open,
             is_open: &mut self.show_side_panel,
             has_image,
             params: &mut self.slider_params,
@@ -911,25 +1048,27 @@ impl eframe::App for ImageViewerApp {
             Some(crate::panels::AdjustmentAction::Change) => {
                 if let Some(sess) = &mut self.session {
                     if self.slider_params.is_identity() {
+                        self.debouncer.cancel_pending();
+                        self.pending_adjustment = None;
                         sess.cancel_adjustments();
                     } else {
                         let base = sess.committed_image();
-                        self.debouncer.request(base, self.slider_params);
+                        self.pending_adjustment =
+                            Some(self.debouncer.request(base, self.slider_params));
                     }
                 }
             }
             Some(crate::panels::AdjustmentAction::Reset)
             | Some(crate::panels::AdjustmentAction::Cancel) => {
+                self.debouncer.cancel_pending();
+                self.pending_adjustment = None;
                 self.slider_params = AdjustmentParams::default();
                 if let Some(sess) = &mut self.session {
                     sess.cancel_adjustments();
                 }
             }
             Some(crate::panels::AdjustmentAction::Apply) => {
-                if let Some(sess) = &mut self.session {
-                    sess.apply_adjustments();
-                }
-                self.slider_params = AdjustmentParams::default();
+                self.apply_current_adjustments();
             }
             None => {}
         }
@@ -1130,5 +1269,7 @@ impl eframe::App for ImageViewerApp {
                 });
             ctx.request_repaint();
         }
+        self.show_leave_dialog(ctx);
+        self.update_preferences(ctx);
     }
 }

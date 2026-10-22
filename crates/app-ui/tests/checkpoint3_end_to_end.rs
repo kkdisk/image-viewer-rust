@@ -19,6 +19,7 @@ fn test_checkpoint3_editing_and_comparison_lifecycle() {
 
     let mut app = ImageViewerApp::default();
     assert!(app.open_image_path(image_path.clone()).is_ok());
+    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
 
     let session = app.session.as_ref().unwrap();
     assert_eq!(session.original_image().get_pixel(0, 0)[0], 100);
@@ -87,6 +88,7 @@ fn test_checkpoint3_editing_and_comparison_lifecycle() {
 
     // 6. 原地原子存檔
     assert!(app.save_current_image());
+    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
     assert!(!app.session.as_ref().unwrap().is_dirty());
 
     // 驗證磁碟檔案內容已正確替換且無損

@@ -101,6 +101,11 @@ impl AdjustmentDebouncer {
         self.current_request_id.load(Ordering::Relaxed)
     }
 
+    /// 切圖或取消預覽時使背景及已排隊的舊結果失效。
+    pub fn cancel_pending(&self) {
+        self.current_request_id.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// 輪詢是否有完成的微調計算結果
     pub fn poll(&self) -> Option<AdjustmentResult> {
         let mut latest_result = None;

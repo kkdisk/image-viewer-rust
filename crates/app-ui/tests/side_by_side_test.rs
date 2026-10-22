@@ -19,6 +19,7 @@ fn test_side_by_side_comparison_toggle_and_sync() {
 
     let mut app = ImageViewerApp::default();
     assert!(app.open_image_path(main_img_path.clone()).is_ok());
+    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
 
     // 初始狀態：比對模式未開啟
     assert!(!app.comparison.is_active);

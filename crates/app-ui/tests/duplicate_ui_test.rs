@@ -3,6 +3,38 @@ use image::{ImageBuffer, Rgba};
 use std::fs;
 
 #[test]
+fn smart_selection_keeps_unknown_sizes_and_a_valid_representative() {
+    let mut state = DuplicateFinderState::default();
+    let item = |dimensions, size_bytes| DuplicateItemUi {
+        path: "test.png".into(),
+        dimensions,
+        size_bytes,
+        selected_for_delete: true,
+    };
+    state.groups = vec![DuplicateGroupUi {
+        id: 1,
+        max_distance: 0,
+        is_expanded: true,
+        items: vec![
+            item(None, u64::MAX),
+            item(Some((32, 32)), 10),
+            item(Some((64, 64)), 1),
+            item(Some((0, 100)), u64::MAX),
+        ],
+    }];
+    state.mark_all_duplicates_keep_highest_resolution();
+    let selected: Vec<_> = state.groups[0]
+        .items
+        .iter()
+        .map(|i| i.selected_for_delete)
+        .collect();
+    assert_eq!(selected, vec![false, true, false, false]);
+    state.groups[0].items = vec![item(None, 100), item(Some((0, 0)), 200)];
+    state.mark_all_duplicates_keep_highest_resolution();
+    assert!(state.groups[0].items.iter().all(|i| !i.selected_for_delete));
+}
+
+#[test]
 fn test_duplicate_finder_state_selection_and_deletion() {
     let temp_dir = std::env::temp_dir().join("image_viewer_test_duplicates");
     fs::create_dir_all(&temp_dir).unwrap();

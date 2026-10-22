@@ -75,6 +75,7 @@ fn test_app_archive_open_navigation_and_save_protection() {
 
     // 導覽至下一張圖片
     app.navigate_next();
+    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
     assert_eq!(app.playlist.current_index(), Some(1));
     assert!(app.is_current_image_from_archive());
 
@@ -87,11 +88,12 @@ fn test_app_archive_open_navigation_and_save_protection() {
         .as_mut()
         .unwrap()
         .update_preview(app.slider_params);
-    app.session.as_mut().unwrap().apply_adjustments();
+    assert!(app.apply_current_adjustments());
 
     // 驗證安全防護：壓縮包圖片儲存至外部新檔案 (另存新檔)
     let exported_path = temp_dir.path().join("exported_copy.png");
     assert!(app.save_image_to(&exported_path));
+    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
     assert!(exported_path.exists());
 
     // 驗證原暫存檔與原始 ZIP 檔案絕對未被覆寫

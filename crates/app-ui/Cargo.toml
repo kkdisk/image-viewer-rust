@@ -24,6 +24,9 @@ anyhow.workspace = true
 rfd.workspace = true
 trash.workspace = true
 rayon.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -36,6 +36,7 @@ fn newer_image_survives_old_archive_result() {
     let mut app = ImageViewerApp::default();
     app.open_file_path(archive_path).unwrap();
     app.open_file_path(image_path.clone()).unwrap();
+    assert!(app.wait_document_io(Duration::from_secs(5)));
     drain_result(&mut app);
     assert_eq!(
         app.session.as_ref().unwrap().source_path(),

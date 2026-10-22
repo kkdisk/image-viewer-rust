@@ -14,6 +14,7 @@ fn test_app_undo_redo_and_atomic_save() {
 
     let mut app = app_ui::app::ImageViewerApp::default();
     assert!(app.open_image_path(file_path.clone()).is_ok());
+    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
 
     let session = app.session.as_ref().unwrap();
     assert!(!session.can_undo());
@@ -47,6 +48,7 @@ fn test_app_undo_redo_and_atomic_save() {
 
     // 測試原子儲存
     assert!(app.save_current_image());
+    assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
     assert!(!app.session.as_ref().unwrap().is_dirty());
 
     // 驗證檔案內容已被原子寫回

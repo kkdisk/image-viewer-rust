@@ -15,6 +15,7 @@ pub use histogram_view::{HistogramMode, HistogramWidget};
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
+    Exit,
     Open,
     Save,
     SaveAs,
@@ -84,7 +85,8 @@ impl MenuBar {
                         }
                         ui.separator();
                         if ui.button("❌ 結束 (Exit)").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            triggered_action = Some(MenuAction::Exit);
+                            ui.close_menu();
                         }
                     });
 
@@ -370,6 +372,8 @@ pub enum AdjustmentAction {
 
 /// 側邊微調面板狀態與參數容器
 pub struct AdjustmentPanelState<'a> {
+    pub white_balance_open: &'a mut bool,
+    pub fine_tune_open: &'a mut bool,
     pub is_open: &'a mut bool,
     pub has_image: bool,
     pub params: &'a mut AdjustmentParams,
@@ -442,78 +446,93 @@ impl AdjustmentPanel {
                     return;
                 }
 
-                // 即時分佈直方圖
-                HistogramWidget::show(ui, state.histogram_data, state.histogram_mode);
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(8.0);
-
                 let mut changed = false;
+                egui::ScrollArea::vertical()
+                    .id_salt("adjustment_controls_scroll")
+                    .max_height((ui.available_height() - 72.0).max(0.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        // 即時分佈直方圖
+                        HistogramWidget::show(ui, state.histogram_data, state.histogram_mode);
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
 
-                // 1. 白平衡區塊
-                ui.collapsing(
-                    RichText::new("白平衡 (White Balance)")
-                        .strong()
-                        .color(ThemeColors::TEXT_PRIMARY),
-                    |ui| {
-                        ui.add_space(4.0);
-                        let s_temp = ui.add(
-                            egui::Slider::new(&mut state.params.temperature, -100..=100)
-                                .clamping(egui::SliderClamping::Always)
-                                .text("色溫 (K)"),
-                        );
-                        if s_temp.changed() {
-                            changed = true;
+                        // 1. 白平衡區塊
+                        let white_balance = egui::CollapsingHeader::new(
+                            RichText::new("白平衡 (White Balance)")
+                                .strong()
+                                .color(ThemeColors::TEXT_PRIMARY),
+                        )
+                        .id_salt("white_balance")
+                        .open(Some(*state.white_balance_open))
+                        .show(ui, |ui| {
+                            ui.add_space(4.0);
+                            let s_temp = ui.add(
+                                egui::Slider::new(&mut state.params.temperature, -100..=100)
+                                    .clamping(egui::SliderClamping::Always)
+                                    .text("色溫 (K)"),
+                            );
+                            if s_temp.changed() {
+                                changed = true;
+                            }
+
+                            let s_tint = ui.add(
+                                egui::Slider::new(&mut state.params.tint, -100..=100)
+                                    .clamping(egui::SliderClamping::Always)
+                                    .text("色調 (Tint)"),
+                            );
+                            if s_tint.changed() {
+                                changed = true;
+                            }
+                        });
+                        if white_balance.header_response.clicked() {
+                            *state.white_balance_open = !*state.white_balance_open;
                         }
 
-                        let s_tint = ui.add(
-                            egui::Slider::new(&mut state.params.tint, -100..=100)
-                                .clamping(egui::SliderClamping::Always)
-                                .text("色調 (Tint)"),
-                        );
-                        if s_tint.changed() {
-                            changed = true;
-                        }
-                    },
-                );
+                        ui.add_space(6.0);
 
-                ui.add_space(6.0);
+                        // 2. 細部微調區塊
+                        let fine_tune = egui::CollapsingHeader::new(
+                            RichText::new("細部調整 (Fine Tune)")
+                                .strong()
+                                .color(ThemeColors::TEXT_PRIMARY),
+                        )
+                        .id_salt("fine_tune")
+                        .open(Some(*state.fine_tune_open))
+                        .show(ui, |ui| {
+                            ui.add_space(4.0);
+                            let s_bright = ui.add(
+                                egui::Slider::new(&mut state.params.brightness, 0.0..=2.0)
+                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                    .text("亮度 (Brightness)"),
+                            );
+                            if s_bright.changed() {
+                                changed = true;
+                            }
 
-                // 2. 細部微調區塊
-                ui.collapsing(
-                    RichText::new("細部調整 (Fine Tune)")
-                        .strong()
-                        .color(ThemeColors::TEXT_PRIMARY),
-                    |ui| {
-                        ui.add_space(4.0);
-                        let s_bright = ui.add(
-                            egui::Slider::new(&mut state.params.brightness, 0.0..=2.0)
-                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                .text("亮度 (Brightness)"),
-                        );
-                        if s_bright.changed() {
-                            changed = true;
-                        }
+                            let s_contrast = ui.add(
+                                egui::Slider::new(&mut state.params.contrast, 0.0..=2.0)
+                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                    .text("對比度 (Contrast)"),
+                            );
+                            if s_contrast.changed() {
+                                changed = true;
+                            }
 
-                        let s_contrast = ui.add(
-                            egui::Slider::new(&mut state.params.contrast, 0.0..=2.0)
-                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                .text("對比度 (Contrast)"),
-                        );
-                        if s_contrast.changed() {
-                            changed = true;
+                            let s_sat = ui.add(
+                                egui::Slider::new(&mut state.params.saturation, 0.0..=2.0)
+                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
+                                    .text("飽和度 (Saturation)"),
+                            );
+                            if s_sat.changed() {
+                                changed = true;
+                            }
+                        });
+                        if fine_tune.header_response.clicked() {
+                            *state.fine_tune_open = !*state.fine_tune_open;
                         }
-
-                        let s_sat = ui.add(
-                            egui::Slider::new(&mut state.params.saturation, 0.0..=2.0)
-                                .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                .text("飽和度 (Saturation)"),
-                        );
-                        if s_sat.changed() {
-                            changed = true;
-                        }
-                    },
-                );
+                    });
 
                 if changed {
                     *action = Some(AdjustmentAction::Change);
@@ -548,7 +567,10 @@ impl AdjustmentPanel {
                         )
                         .fill(ThemeColors::ACCENT);
 
-                        if ui.add_enabled(is_dirty, apply_btn).clicked() {
+                        if ui
+                            .add_enabled(is_dirty && !state.is_computing, apply_btn)
+                            .clicked()
+                        {
                             *action = Some(AdjustmentAction::Apply);
                         }
                     });
@@ -557,157 +579,5 @@ impl AdjustmentPanel {
     }
 }
 
-use crate::playlist::ImagePlaylist;
-use crate::thumbnail_loader::ThumbnailManager;
-use egui::{Align, Rect, ScrollArea, pos2, vec2};
-
-/// 底部 Filmstrip 縮圖列容器
-pub struct FilmstripPanel;
-
-impl FilmstripPanel {
-    pub fn show(
-        ctx: &egui::Context,
-        is_open: &mut bool,
-        playlist: &ImagePlaylist,
-        thumbnail_mgr: &mut ThumbnailManager,
-        on_select: &mut impl FnMut(usize),
-        on_prev: &mut impl FnMut(),
-        on_next: &mut impl FnMut(),
-    ) {
-        if !*is_open {
-            return;
-        }
-
-        TopBottomPanel::bottom("bottom_filmstrip_panel")
-            .resizable(false)
-            .exact_height(105.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(ThemeColors::BG_APP)
-                    .inner_margin(Margin::symmetric(10.0, 6.0)),
-            )
-            .show(ctx, |ui| {
-                // 頂部小工具列
-                ui.horizontal(|ui| {
-                    let count_text = if playlist.is_empty() {
-                        "🎞 縮圖列表 (無檔案)".to_owned()
-                    } else if let Some(idx) = playlist.current_index() {
-                        format!("🎞 縮圖列表 ({} / {})", idx + 1, playlist.len())
-                    } else {
-                        format!("🎞 縮圖列表 (共 {} 張)", playlist.len())
-                    };
-
-                    ui.label(
-                        RichText::new(count_text)
-                            .color(ThemeColors::TEXT_SECONDARY)
-                            .size(12.0),
-                    );
-
-                    if !playlist.is_empty() {
-                        ui.add_space(8.0);
-                        if ui.small_button("◀ 上一張").clicked() {
-                            on_prev();
-                        }
-                        if ui.small_button("下一張 ▶").clicked() {
-                            on_next();
-                        }
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("收合").clicked() {
-                            *is_open = false;
-                        }
-                    });
-                });
-
-                ui.add_space(4.0);
-
-                // 橫向縮圖滾動區
-                ScrollArea::horizontal()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let curr_idx = playlist.current_index();
-                            let card_size = vec2(68.0, 68.0);
-
-                            for (idx, path) in playlist.files().iter().enumerate() {
-                                let is_selected = curr_idx == Some(idx);
-                                let (rect, response) =
-                                    ui.allocate_exact_size(card_size, egui::Sense::click());
-
-                                if is_selected {
-                                    response.scroll_to_me(Some(Align::Center));
-                                }
-
-                                // 背景底板
-                                let bg_color = if is_selected {
-                                    ThemeColors::BG_WIDGET_ACTIVE
-                                } else if response.hovered() {
-                                    ThemeColors::BG_WIDGET_HOVER
-                                } else {
-                                    ThemeColors::BG_WIDGET
-                                };
-                                ui.painter()
-                                    .rect_filled(rect, Rounding::same(4.0), bg_color);
-
-                                // 取得或請求縮圖：僅當可見或處於目前鄰近範圍內時優先向後台發起載入，其餘僅查快取
-                                let is_visible = ui.is_rect_visible(rect);
-                                let is_near = if let Some(c) = curr_idx {
-                                    (idx as isize - c as isize).abs() <= 10
-                                } else {
-                                    idx < 15
-                                };
-
-                                let tex_opt = if is_visible || is_near {
-                                    thumbnail_mgr.get_or_request(path)
-                                } else {
-                                    thumbnail_mgr.get_cached(path)
-                                };
-
-                                if let Some(tex) = tex_opt {
-                                    let inner_margin = 4.0;
-                                    let img_rect = Rect::from_min_max(
-                                        pos2(rect.left() + inner_margin, rect.top() + inner_margin),
-                                        pos2(
-                                            rect.right() - inner_margin,
-                                            rect.bottom() - inner_margin,
-                                        ),
-                                    );
-                                    ui.painter().image(
-                                        tex.id(),
-                                        img_rect,
-                                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                        egui::Color32::WHITE,
-                                    );
-                                } else {
-                                    // 載入中佔位顯示
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        "⏳",
-                                        egui::FontId::proportional(16.0),
-                                        ThemeColors::TEXT_MUTED,
-                                    );
-                                }
-
-                                // 邊框高亮
-                                let border_stroke = if is_selected {
-                                    Stroke::new(2.0, ThemeColors::ACCENT)
-                                } else if response.hovered() {
-                                    Stroke::new(1.0, ThemeColors::ACCENT_HOVER)
-                                } else {
-                                    Stroke::new(1.0, ThemeColors::BORDER)
-                                };
-                                ui.painter()
-                                    .rect_stroke(rect, Rounding::same(4.0), border_stroke);
-
-                                // 點擊卡片切換
-                                if response.clicked() {
-                                    on_select(idx);
-                                }
-                            }
-                        });
-                    });
-            });
-    }
-}
+pub mod filmstrip;
+pub use filmstrip::FilmstripPanel;

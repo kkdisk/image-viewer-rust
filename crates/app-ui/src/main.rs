@@ -4,10 +4,21 @@ use app_ui::app::ImageViewerApp;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    let mut path = app_ui::preferences::config_path();
+    let (settings, error) = match path.as_deref().map(app_ui::preferences::load).transpose() {
+        Ok(settings) => (settings.unwrap_or_default(), None),
+        Err(error) => {
+            // 保留損毀或較新版本的原始設定，本次只使用預設值。
+            path = None;
+            (app_ui::preferences::Preferences::default(), Some(error))
+        }
+    };
     let native_options = eframe::NativeOptions {
+        centered: true,
         viewport: egui::ViewportBuilder::default()
             .with_title("Rust Image Viewer")
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size(settings.window_size)
+            .with_maximized(settings.maximized)
             .with_min_inner_size([800.0, 600.0])
             .with_active(true),
         ..Default::default()
@@ -16,6 +27,16 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Rust Image Viewer",
         native_options,
-        Box::new(|cc| Ok(Box::new(ImageViewerApp::new(cc)))),
+        Box::new(move |cc| {
+            let mut app = ImageViewerApp::new(cc);
+            app.configure_preferences(settings, path);
+            if let Some(error) = error {
+                app.status_notification = Some((
+                    format!("偏好設定無法讀取，本次使用預設值：{error}"),
+                    std::time::Instant::now(),
+                ));
+            }
+            Ok(Box::new(app))
+        }),
     )
 }

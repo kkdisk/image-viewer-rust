@@ -344,23 +344,24 @@ impl DuplicateFinderState {
                 continue;
             }
             // 找出像素最多的索引
-            let mut best_idx = 0;
+            let mut best_idx = None;
             let mut max_pixels = 0u64;
 
             for (idx, item) in group.items.iter().enumerate() {
-                let pixels = if let Some((w, h)) = item.dimensions {
-                    (w as u64) * (h as u64)
-                } else {
-                    item.size_bytes
-                };
+                let pixels = item
+                    .dimensions
+                    .map(|(w, h)| u64::from(w) * u64::from(h))
+                    .unwrap_or(0);
                 if pixels > max_pixels {
                     max_pixels = pixels;
-                    best_idx = idx;
+                    best_idx = Some(idx);
                 }
             }
 
             for (idx, item) in group.items.iter_mut().enumerate() {
-                item.selected_for_delete = idx != best_idx;
+                // 未知或無效尺寸不具備安全比較依據，保留供使用者人工確認。
+                let valid = item.dimensions.is_some_and(|(w, h)| w > 0 && h > 0);
+                item.selected_for_delete = valid && best_idx.is_some_and(|best| idx != best);
             }
         }
     }
@@ -735,7 +736,7 @@ impl DuplicateFinderDialog {
                         }
                         if ui
                             .button(
-                                RichText::new("⭐ 保留畫質最高 (其餘勾選)")
+                                RichText::new("⭐ 保留解析度最高 (其餘勾選)")
                                     .color(Color32::from_rgb(240, 240, 245)),
                             )
                             .clicked()
