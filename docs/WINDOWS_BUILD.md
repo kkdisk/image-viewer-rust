@@ -1,5 +1,13 @@
 # Windows 建置與驗收
 
+## 0.7.0 Git 與 CI 交付（2026-10-23）
+
+- 程式碼提交 `c04d0243b4a9ada335cf6e1fecd1d2b3b7f8c60a` 已推送至 origin/main；[main CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/39961031532) 為 completed/success，包含格式、Clippy、工作區測試、發布建置與封裝。
+- 已建立並推送附註標籤 `v0.7.0`，標籤物件 `aa9efce793addbfee54103522d47dca78c5c4850`，遠端解析已核對為上述程式碼提交。
+- [標籤 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/39962631717) 已啟動，執行結果另行核對；工作流程只建立 Release 草稿，不等同公開發布。
+- 本輪修正與驗證見 [審查紀錄](REVIEW_V070.md)。使用者已驗收平滑曲線桌面操作；本輪兩項保護以新增回歸測試驗證，本機共 170 項通過、3 項忽略。
+- 0.8.0 批次處理已依使用者指示暫緩，僅有[非批次候選評估](EVALUATION_V080.md)，未實作。
+
 ## 0.7.0 審查修正版（2026-10-23，最新本機產物）
 
 - 已完成 [程式碼審查](REVIEW_V070.md)，重現並修正來源路徑別名繞過預設集原圖保護、預設集操作期間可提前關閉兩項問題。
