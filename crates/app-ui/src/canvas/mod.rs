@@ -70,7 +70,11 @@ pub struct CanvasView;
 
 impl CanvasView {
     /// 繪製中央畫布區域（自動依據 ComparisonConfig 呈現單圖或雙圖比對模式）
-    pub fn show(ui: &mut Ui, state: &mut CanvasState<'_>, action: &mut Option<ComparisonAction>) {
+    pub fn show(
+        ui: &mut Ui,
+        state: &mut CanvasState<'_>,
+        action: &mut Option<ComparisonAction>,
+    ) -> Option<Rect> {
         let available_size = ui.available_size();
         let (rect, _response) = ui.allocate_exact_size(available_size, Sense::hover());
 
@@ -188,6 +192,7 @@ impl CanvasView {
         {
             MagnifierWidget::render(ui, rect, img_rect, img, state.magnifier_zoom, cursor_pos);
         }
+        active_image_rect
     }
 
     /// 渲染單個視口畫布與處理互動，並回傳 (Response, 影像繪製區域)
@@ -256,7 +261,12 @@ impl CanvasView {
             );
 
             // 處理滑鼠拖曳平移
-            if response.dragged() {
+            if response.dragged()
+                && !ui.ctx().data(|data| {
+                    data.get_temp::<bool>(Id::new("crop_active"))
+                        .unwrap_or(false)
+                })
+            {
                 let delta = response.drag_delta();
                 viewport.pan.0 += delta.x;
                 viewport.pan.1 += delta.y;

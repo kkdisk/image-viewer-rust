@@ -11,6 +11,8 @@ use crate::history::HistoryManager;
 /// 影像編輯 Session
 #[derive(Debug)]
 pub struct EditingSession {
+    id: u64,
+    geometry_preview: bool,
     /// 原始載入之影像底圖（不可變快照）
     original_image: Arc<RgbaImage>,
     /// 來源檔案路徑（若直接自檔案載入）
@@ -30,6 +32,11 @@ impl EditingSession {
         let history = HistoryManager::new(Arc::clone(&shared_image), "開啟影像");
 
         Self {
+            id: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
+            geometry_preview: false,
             original_image: Arc::clone(&shared_image),
             source_path,
             history,
@@ -74,7 +81,45 @@ impl EditingSession {
 
     /// 檢查是否有進行中的微調預覽
     pub fn has_active_preview(&self) -> bool {
-        self.preview_image.is_some() && !self.adjustment_params.is_identity()
+        self.geometry_preview
+            || (self.preview_image.is_some() && !self.adjustment_params.is_identity())
+    }
+
+    pub fn identity(&self) -> (u64, u64) {
+        (self.id, self.history.current_id())
+    }
+
+    pub fn begin_geometry_draft(&mut self) {
+        self.geometry_preview = true;
+    }
+
+    pub fn set_geometry_preview(&mut self, image: Arc<RgbaImage>) {
+        self.preview_image = Some(image);
+        self.geometry_preview = true;
+        self.adjustment_params = AdjustmentParams::default();
+    }
+
+    pub fn apply_geometry_preview(&mut self, description: &str) -> bool {
+        if !self.geometry_preview {
+            return false;
+        }
+        if let Some(image) = self.preview_image.take() {
+            self.history.push(image, description);
+            self.geometry_preview = false;
+            return true;
+        }
+        false
+    }
+
+    pub fn set_history_budget(&mut self, bytes: usize) {
+        self.history.set_budget(bytes);
+    }
+
+    pub fn preview_bytes(&self) -> usize {
+        self.preview_image
+            .as_ref()
+            .filter(|image| !Arc::ptr_eq(image, &self.committed_image()))
+            .map_or(0, |image| image.as_raw().len())
     }
 
     /// 即時更新微調預覽
@@ -82,6 +127,7 @@ impl EditingSession {
     /// 若參數為預設值 (identity)，自動清除預覽以節省記憶體；
     /// 否則基於目前 Committed 影像進行平行微調運算並快取預覽。
     pub fn update_preview(&mut self, params: AdjustmentParams) {
+        self.geometry_preview = false;
         self.adjustment_params = params;
 
         if params.is_identity() {
@@ -95,6 +141,7 @@ impl EditingSession {
 
     /// 設定由背景非同步運算完成之預覽影像快照
     pub fn set_preview_image(&mut self, preview: Arc<RgbaImage>, params: AdjustmentParams) {
+        self.geometry_preview = false;
         self.adjustment_params = params;
         if params.is_identity() {
             self.preview_image = None;
@@ -105,6 +152,9 @@ impl EditingSession {
 
     /// 套用微調：將目前預覽結果提交至 Undo 歷史，並重設微調滑桿
     pub fn apply_adjustments(&mut self) -> bool {
+        if self.geometry_preview {
+            return false;
+        }
         if let Some(preview) = self.preview_image.take() {
             self.history.push(preview, "套用微調參數");
             self.adjustment_params = AdjustmentParams::default();
@@ -116,6 +166,7 @@ impl EditingSession {
 
     /// 取消微調：捨棄即時預覽，重設微調滑桿至預設值，完全不更動歷史
     pub fn cancel_adjustments(&mut self) {
+        self.geometry_preview = false;
         self.preview_image = None;
         self.adjustment_params = AdjustmentParams::default();
     }

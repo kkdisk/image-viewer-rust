@@ -66,6 +66,8 @@ pub fn apply_theme(ctx: &egui::Context) {
     // 優先設定中文字型
     setup_custom_fonts(ctx);
 
+    // 固定深色偏好，避免系統淺色模式覆蓋浮窗與原生元件樣式。
+    ctx.set_theme(egui::Theme::Dark);
     let mut visuals = Visuals::dark();
 
     // 背景底色
@@ -115,6 +117,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.window_margin = Margin::same(8.0);
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.interact_size.y = 26.0;
     style.visuals = visuals;
 
     ctx.set_style(style);

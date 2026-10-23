@@ -11,8 +11,7 @@ use crate::canvas::{
 };
 use crate::debounce_queue::AdjustmentDebouncer;
 use crate::panels::{
-    AboutDialog, AdjustmentPanel, AdjustmentPanelState, DuplicateFinderDialog,
-    DuplicateFinderState, FilmstripPanel, MenuBar, StatusBar,
+    AboutDialog, DuplicateFinderDialog, DuplicateFinderState, FilmstripPanel, MenuBar, StatusBar,
 };
 use crate::playlist::ImagePlaylist;
 use crate::theme::apply_theme;
@@ -20,6 +19,8 @@ use crate::thumbnail_loader::ThumbnailManager;
 
 /// 主圖片瀏覽與編輯桌面應用狀態
 pub struct ImageViewerApp {
+    pub(crate) geometry: Option<crate::geometry_editor::GeometryDraft>,
+    pub(crate) export: crate::export_dialog::ExportState,
     pub file_actions: crate::file_actions::FileActions,
     pub slideshow: crate::slideshow::Slideshow,
     pub convenience: crate::convenience::ConvenienceState,
@@ -39,6 +40,7 @@ pub struct ImageViewerApp {
     pub show_side_panel: bool,
     /// 底部縮圖列開關
     pub show_filmstrip: bool,
+    pub filmstrip_height: f32,
     /// 關於對話框顯示開關
     pub show_about_dialog: bool,
     /// 重複圖片檢查器狀態
@@ -55,7 +57,7 @@ pub struct ImageViewerApp {
     pub slider_params: AdjustmentParams,
     /// 像素微調防抖背景運算排程器
     pub debouncer: AdjustmentDebouncer,
-    pending_adjustment: Option<u64>,
+    pub(crate) pending_adjustment: Option<u64>,
     /// 雙圖比對視圖配置
     pub comparison: ComparisonConfig,
     /// 雙圖比對時左側獨立視口（當未開啟同步時使用）
@@ -106,6 +108,8 @@ pub struct ImageViewerApp {
 impl Default for ImageViewerApp {
     fn default() -> Self {
         Self {
+            geometry: None,
+            export: Default::default(),
             file_actions: Default::default(),
             slideshow: Default::default(),
             convenience: Default::default(),
@@ -121,6 +125,7 @@ impl Default for ImageViewerApp {
             viewport: ViewportState::new(),
             show_side_panel: true,
             show_filmstrip: true,
+            filmstrip_height: 110.0,
             show_about_dialog: false,
             duplicate_finder_state: DuplicateFinderState::default(),
             texture: None,
@@ -161,6 +166,7 @@ impl Default for ImageViewerApp {
 impl ImageViewerApp {
     pub(crate) fn is_preview_pending(&self) -> bool {
         self.pending_adjustment.is_some()
+            || self.geometry.as_ref().is_some_and(|d| d.pending.is_some())
     }
     /// 建立應用實例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -571,6 +577,9 @@ impl ImageViewerApp {
 
     /// 僅在背景預覽完成後套用，並同步重設介面參數。
     pub fn apply_current_adjustments(&mut self) -> bool {
+        if self.geometry.is_some() {
+            return false;
+        }
         if self.is_document_busy() {
             return false;
         }
@@ -590,6 +599,9 @@ impl ImageViewerApp {
 
     /// 復原上一動作
     pub fn undo(&mut self) {
+        if self.geometry.is_some() {
+            return;
+        }
         if self.is_document_busy() {
             return;
         }
@@ -604,6 +616,9 @@ impl ImageViewerApp {
 
     /// 重做下一動作
     pub fn redo(&mut self) {
+        if self.geometry.is_some() {
+            return;
+        }
         if self.is_document_busy() {
             return;
         }
@@ -839,6 +854,14 @@ impl eframe::App for ImageViewerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_export();
+        if self.geometry.as_ref().is_some_and(|d| {
+            self.session
+                .as_ref()
+                .is_none_or(|s| s.identity() != d.identity)
+        }) {
+            self.cancel_geometry();
+        }
         self.poll_convenience();
         self.poll_file_actions();
         self.handle_focus_refresh(ctx);
@@ -904,12 +927,8 @@ impl eframe::App for ImageViewerApp {
 
         // 3. 輪詢背景微調防抖計算結果
         if let Some(res) = self.debouncer.poll() {
-            self.pending_adjustment = None;
-            let params = self.slider_params;
-            if let Some(sess) = &mut self.session {
-                sess.set_preview_image(res.adjusted_image, params);
-                ctx.request_repaint();
-            }
+            self.accept_pixel_result(res);
+            ctx.request_repaint();
         }
         if self.pending_adjustment.is_some() || self.debouncer.is_computing() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
@@ -952,6 +971,15 @@ impl eframe::App for ImageViewerApp {
 
             if let Some(action) = MenuBar::show(ctx, &mut menu_state) {
                 match action {
+                    crate::panels::MenuAction::Crop => {
+                        self.begin_geometry(crate::geometry_editor::GeometryTool::Crop);
+                    }
+                    crate::panels::MenuAction::Resize => {
+                        self.begin_geometry(crate::geometry_editor::GeometryTool::Resize);
+                    }
+                    crate::panels::MenuAction::Export => {
+                        self.begin_export();
+                    }
                     crate::panels::MenuAction::Sampling(mode) => {
                         self.preferences.current.sampling = mode
                     }
@@ -979,7 +1007,10 @@ impl eframe::App for ImageViewerApp {
                         self.preferences.current.confirm_delete =
                             !self.preferences.current.confirm_delete
                     }
-                    crate::panels::MenuAction::Info => self.convenience.info_open = true,
+                    crate::panels::MenuAction::Info => {
+                        self.convenience.info_tab = true;
+                        self.show_side_panel = true;
+                    }
                     crate::panels::MenuAction::CopyPath => self.copy_source_path(ctx),
                     crate::panels::MenuAction::Transform(transform) => {
                         if !self.transform_image(transform) {
@@ -1044,6 +1075,7 @@ impl eframe::App for ImageViewerApp {
                 return;
             }
 
+            let history_details = self.history_details();
             // 6. 底部狀態列
             let (filename, dimensions) = match &self.session {
                 Some(sess) => {
@@ -1082,8 +1114,13 @@ impl eframe::App for ImageViewerApp {
                     dimensions,
                     zoom: self.viewport.zoom,
                     document: self.document_status(),
-                    playlist_info,
+                    playlist_info: if self.show_filmstrip {
+                        None
+                    } else {
+                        playlist_info
+                    },
                     notification: status_msg,
+                    history_details: history_details.as_deref(),
                 },
             );
             if let Some(action) = zoom_action {
@@ -1101,8 +1138,14 @@ impl eframe::App for ImageViewerApp {
                 &self.playlist,
                 &mut self.thumbnail_manager,
                 &mut |idx| nav_to_idx = Some(idx),
-                &mut || do_prev = true,
-                &mut || do_next = true,
+                &mut self.filmstrip_height,
+                &mut |direction| {
+                    if direction < 0 {
+                        do_prev = true;
+                    } else {
+                        do_next = true;
+                    }
+                },
             );
 
             if let Some(idx) = nav_to_idx {
@@ -1121,22 +1164,8 @@ impl eframe::App for ImageViewerApp {
             }
 
             // 8. 側邊微調面板
-            let has_image = self.session.is_some();
-            let is_computing = self.is_preview_pending();
             let mut adjustment_action = None;
-
-            let mut adj_state = AdjustmentPanelState {
-                white_balance_open: &mut self.white_balance_open,
-                fine_tune_open: &mut self.fine_tune_open,
-                is_open: &mut self.show_side_panel,
-                has_image,
-                params: &mut self.slider_params,
-                is_computing,
-                histogram_data: self.cached_histogram.as_ref(),
-                histogram_mode: &mut self.histogram_mode,
-            };
-
-            AdjustmentPanel::show(ctx, &mut adj_state, &mut adjustment_action);
+            self.show_inspector(ctx, &mut adjustment_action);
 
             match adjustment_action {
                 Some(crate::panels::AdjustmentAction::Change) => {
@@ -1147,8 +1176,11 @@ impl eframe::App for ImageViewerApp {
                             sess.cancel_adjustments();
                         } else {
                             let base = sess.committed_image();
-                            self.pending_adjustment =
-                                Some(self.debouncer.request(base, self.slider_params));
+                            self.pending_adjustment = Some(self.debouncer.submit(
+                                base,
+                                Some(sess.identity()),
+                                crate::debounce_queue::PixelOperation::Adjust(self.slider_params),
+                            ));
                         }
                     }
                 }
@@ -1167,6 +1199,14 @@ impl eframe::App for ImageViewerApp {
                 None => {}
             }
         }
+        if self.geometry.is_some() {
+            self.comparison.is_active = false;
+        }
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("crop_active"), self.geometry.is_some())
+        });
+        self.show_geometry_editor(ctx);
+        self.show_export_dialog(ctx);
         // 9. 中央 GPU 加速影像畫布 (支援單圖或雙圖分割對比)
         CentralPanel::default()
             .frame(egui::Frame::none())
@@ -1214,7 +1254,8 @@ impl eframe::App for ImageViewerApp {
                 };
 
                 let mut comparison_action = None;
-                CanvasView::show(ui, &mut canvas_state, &mut comparison_action);
+                let image_rect = CanvasView::show(ui, &mut canvas_state, &mut comparison_action);
+                self.draw_crop_overlay(ui, image_rect);
 
                 match comparison_action {
                     Some(ComparisonAction::ToggleSync) => {

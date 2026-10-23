@@ -8,6 +8,7 @@ pub mod exif;
 pub mod geometry;
 pub mod io;
 pub mod ops;
+pub mod output;
 
 pub use error::ImageError;
 pub use exif::{

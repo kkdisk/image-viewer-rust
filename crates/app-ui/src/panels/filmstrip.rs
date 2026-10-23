@@ -30,17 +30,18 @@ impl FilmstripPanel {
         playlist: &ImagePlaylist,
         thumbnail_mgr: &mut ThumbnailManager,
         on_select: &mut impl FnMut(usize),
-        on_prev: &mut impl FnMut(),
-        on_next: &mut impl FnMut(),
+        height: &mut f32,
+        on_navigate: &mut impl FnMut(isize),
     ) {
         if !*is_open {
             return;
         }
         let recenter = selection_changed(ctx, playlist.current_file().cloned());
 
-        TopBottomPanel::bottom("bottom_filmstrip_panel")
-            .resizable(false)
-            .exact_height(105.0)
+        let panel = TopBottomPanel::bottom("bottom_filmstrip_panel")
+            .resizable(true)
+            .default_height(*height)
+            .height_range(110.0..=220.0)
             .frame(
                 egui::Frame::none()
                     .fill(ThemeColors::BG_APP)
@@ -66,10 +67,10 @@ impl FilmstripPanel {
                     if !playlist.is_empty() {
                         ui.add_space(8.0);
                         if ui.small_button("◀ 上一張").clicked() {
-                            on_prev();
+                            on_navigate(-1);
                         }
                         if ui.small_button("下一張 ▶").clicked() {
-                            on_next();
+                            on_navigate(1);
                         }
                     }
 
@@ -82,13 +83,14 @@ impl FilmstripPanel {
 
                 ui.add_space(4.0);
 
+                let card_edge = (ui.available_height() - 12.0).clamp(48.0, 164.0);
                 // 橫向縮圖滾動區
                 ScrollArea::horizontal()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let curr_idx = playlist.current_index();
-                            let card_size = vec2(68.0, 68.0);
+                            let card_size = vec2(card_edge, card_edge);
 
                             for (idx, path) in playlist.files().iter().enumerate() {
                                 let is_selected = curr_idx == Some(idx);
@@ -162,6 +164,9 @@ impl FilmstripPanel {
                         });
                     });
             });
+        if ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
+            *height = panel.response.rect.height().clamp(110.0, 220.0);
+        }
     }
 }
 
@@ -189,5 +194,77 @@ mod tests {
         assert!(selection_changed(&ctx, Some("other/a.png".into())));
         assert!(selection_changed(&ctx, None));
         assert!(!selection_changed(&ctx, None));
+    }
+    #[test]
+    fn filmstrip_dragged_height_is_restored_in_a_new_context() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let playlist = ImagePlaylist::new();
+        let mut manager = ThumbnailManager::new();
+        let mut height = 140.0;
+        let mut frame = |ctx: &egui::Context, events| {
+            let mut top = 0.0;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    FilmstripPanel::show(
+                        ctx,
+                        &mut true,
+                        &playlist,
+                        &mut manager,
+                        &mut |_| {},
+                        &mut height,
+                        &mut |_| {},
+                    );
+                    top = ctx.available_rect().bottom();
+                },
+            );
+            top
+        };
+        for _ in 0..3 {
+            frame(&ctx, vec![]);
+        }
+        let top = frame(&ctx, vec![]);
+        let pointer = pos2(400.0, top);
+        frame(
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::PointerButton {
+                    pos: pointer,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        let moved = pointer - vec2(0.0, 40.0);
+        frame(&ctx, vec![egui::Event::PointerMoved(moved)]);
+        frame(&ctx, vec![]);
+        frame(
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: moved,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        let resized_top = frame(&ctx, vec![]);
+        assert!(resized_top < top - 20.0, "拖曳必須實際改變縮圖列高度");
+        let restored = egui::Context::default();
+        crate::theme::apply_theme(&restored);
+        for _ in 0..3 {
+            frame(&restored, vec![]);
+        }
+        let restored_top = frame(&restored, vec![]);
+        assert!(
+            (resized_top - restored_top).abs() < 1.0,
+            "重建介面必須恢復拖曳後的高度"
+        );
     }
 }

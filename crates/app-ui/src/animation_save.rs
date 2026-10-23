@@ -61,6 +61,7 @@ impl ImageViewerApp {
                 })
             }) {
                 ui.label("JPEG 儲存會重新壓縮，可能降低畫質。");
+                ui.label("透明區域以白色背景輸出；如需自選背景與品質，請使用「匯出副本」。");
             }
             if let Some(request) = &self.animation_save {
                 ui.label(request.path.display().to_string());

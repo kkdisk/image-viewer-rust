@@ -21,3 +21,6 @@ pub mod slideshow;
 pub mod startup;
 pub mod theme;
 pub mod thumbnail_loader;
+
+mod export_dialog;
+pub mod geometry_editor;

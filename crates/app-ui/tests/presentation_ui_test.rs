@@ -127,6 +127,7 @@ fn status_bar_buttons_work_with_pointer_events_and_are_disabled_without_an_image
             document,
             playlist_info: Some((0, 4)),
             notification: Some("正在背景載入圖片…"),
+            history_details: None,
         };
         status_frame(&ctx, &state, vec![]);
         let (output, _) = status_frame(&ctx, &state, vec![]);
@@ -348,6 +349,7 @@ fn status_rendering_preserves_auto_fit_zoom_and_keeps_dimensions_visible_with_lo
         },
         playlist_info: Some((0, 500)),
         notification: Some(&message),
+        history_details: None,
     };
     status_frame(&ctx, &state, vec![]);
     let (output, action) = status_frame(&ctx, &state, vec![]);
@@ -362,5 +364,65 @@ fn status_rendering_preserves_auto_fit_zoom_and_keeps_dimensions_visible_with_lo
             .find_map(|shape| label_position(&shape.shape, label))
             .unwrap();
         assert!(position.x > 0.0 && position.x < 800.0);
+    }
+}
+
+#[test]
+fn notification_changes_keep_the_canvas_area_stable() {
+    for width in [800.0, 1344.0] {
+        for pixels_per_point in [1.0, 2.0] {
+            let ctx = egui::Context::default();
+            app_ui::theme::apply_theme(&ctx);
+            ctx.set_pixels_per_point(pixels_per_point);
+            let mut state = StatusBarState {
+                animated: false,
+                filename: Some("IMG_2979.JPG"),
+                dimensions: Some((2736, 3648)),
+                zoom: 0.19,
+                document: DocumentStatus::Saved,
+                playlist_info: Some((61, 77)),
+                notification: None,
+                history_details: None,
+            };
+            let mut frame = |notification| {
+                state.notification = notification;
+                let mut canvas = egui::Rect::NOTHING;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 940.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        StatusBar::show(ctx, &state);
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            canvas = ui.max_rect();
+                        });
+                    },
+                );
+                canvas
+            };
+            frame(None);
+            let baseline = frame(None);
+            for notification in [
+                Some("正在背景載入圖片…"),
+                Some("圖片已載入"),
+                Some(
+                    "很長的載入通知，很長的載入通知，很長的載入通知，很長的載入通知\n第二列不應撐高狀態列",
+                ),
+                Some(""),
+                None,
+            ] {
+                for _ in 0..2 {
+                    assert_eq!(
+                        frame(notification),
+                        baseline,
+                        "通知切換不可改變畫布：寬度 {width}，顯示倍率 {pixels_per_point}"
+                    );
+                }
+            }
+        }
     }
 }

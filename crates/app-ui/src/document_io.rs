@@ -244,7 +244,7 @@ impl ImageViewerApp {
         self.document_io.pending_save.is_some() || self.animation_save.is_some()
     }
     pub fn is_document_busy(&self) -> bool {
-        self.is_saving() || self.is_transforming() || self.is_recycling()
+        self.is_saving() || self.is_transforming() || self.is_recycling() || self.export.is_busy()
     }
     pub fn is_loading_image(&self) -> bool {
         self.document_io.pending_main.is_some()
@@ -480,6 +480,7 @@ impl ImageViewerApp {
     pub fn wait_document_io(&mut self, timeout: Duration) -> bool {
         let start = Instant::now();
         loop {
+            self.poll_export();
             self.poll_convenience();
             self.poll_file_actions();
             self.poll_document_io();

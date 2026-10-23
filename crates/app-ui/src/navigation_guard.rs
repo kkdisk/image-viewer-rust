@@ -53,6 +53,7 @@ impl ImageViewerApp {
             self.show_animation_save_dialog(ctx);
             return;
         }
+        self.show_export_dialog(ctx);
         self.show_leave_dialog(ctx);
         if self.is_document_busy() {
             egui::Window::new("正在處理圖片")
@@ -147,6 +148,7 @@ impl ImageViewerApp {
             return Ok(false);
         };
         self.leave_guard.error = None;
+        self.cancel_geometry();
         let result = match action {
             LeaveAction::Refresh => {
                 self.start_refresh(true);

@@ -6,6 +6,9 @@
 **0.4.0／0.5.0 補充契約**：[資源與瀏覽](SPEC_BROWSING_RESOURCES.md)
 **0.5.x 補充契約**：[看圖便利操作](SPEC_VIEWING_CONVENIENCE.md)
 **0.5.2 補充契約**：[高品質放大](SPEC_HIGH_QUALITY_ZOOM.md)
+**0.6.1 介面契約**：[狀態列、側欄與縮圖排版](UI_LAYOUT_REVIEW.md)
+
+**0.6.0 補充契約**：[裁切、尺寸與輸出](SPEC_EDITING_OUTPUT.md)
 **關聯意圖**：[docs/intent/rust_image_viewer_migration.md](docs/intent/rust_image_viewer_migration.md)
 
 ---

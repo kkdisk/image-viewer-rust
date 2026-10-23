@@ -1,6 +1,6 @@
 //! 影像安全載入與原子儲存模組
 
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufReader, BufWriter, Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -131,59 +131,50 @@ pub fn load_image_from_memory_with_limit(
     Ok(apply_orientation(decoded, orientation))
 }
 
-/// 原子儲存影像至目標路徑（先寫入同目錄暫存檔，寫入完成後原子替換）
+/// 同目錄暫存寫入，替換失敗直接保留原檔，不先移動或刪除目標。
+pub fn write_atomic(
+    target: &Path,
+    encode: impl FnOnce(&mut BufWriter<&mut File>) -> Result<(), ImageError>,
+) -> Result<(), ImageError> {
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temp = Builder::new()
+        .prefix(".image-output-")
+        .tempfile_in(parent)?;
+    {
+        let mut writer = BufWriter::new(temp.as_file_mut());
+        encode(&mut writer)?;
+        writer.flush()?;
+    }
+    temp.as_file().sync_all()?;
+    temp.persist(target)
+        .map_err(|error| ImageError::Io(error.error))?;
+    Ok(())
+}
+
+/// 舊有儲存入口維持格式支援；未知副檔名明確拒絕，JPEG 使用白色背景。
 pub fn save_image_atomic<P: AsRef<Path>>(
     img: &DynamicImage,
     target_path: P,
 ) -> Result<(), ImageError> {
     let target = target_path.as_ref();
-    let parent = target.parent().unwrap_or_else(|| Path::new("."));
-
-    // 由目標路徑推斷影像格式，未指定時預設為 PNG
-    let format = ImageFormat::from_path(target).unwrap_or(ImageFormat::Png);
-
-    let ext = target.extension().and_then(|s| s.to_str()).unwrap_or("tmp");
-
-    // 在同目錄下建立具備唯一名稱的暫存檔案
-    let mut temp_file = Builder::new()
-        .suffix(&format!(".{ext}"))
-        .tempfile_in(parent)?;
-
-    // 寫入影像資料至暫存檔
-    {
-        let mut writer = BufWriter::new(&mut temp_file);
-        img.write_to(&mut writer, format)?;
-        writer.flush()?;
+    let format = ImageFormat::from_path(target)
+        .map_err(|_| ImageError::UnsupportedFormat(target.display().to_string()))?;
+    if format == ImageFormat::Jpeg {
+        return crate::output::save_with_options(
+            &img.to_rgba8(),
+            target,
+            crate::output::OutputOptions {
+                format: crate::output::OutputFormat::Jpeg,
+                quality: 80,
+                ..Default::default()
+            },
+        );
     }
-
-    // 原子替換至目標路徑
-    match temp_file.persist(target) {
-        Ok(_) => Ok(()),
-        Err(persist_err) => {
-            // 在 Windows 環境下，若目標檔案已存在，部分情況下 persist 可能無法直接覆蓋
-            // 使用備份交換方式安全替換，確保資料完整性
-            let temp_path = persist_err.file.into_temp_path();
-            if target.exists() {
-                let backup_file = Builder::new()
-                    .prefix(".atomic_backup_")
-                    .tempfile_in(parent)?;
-                let backup_path = backup_file.into_temp_path();
-
-                // 1. 將舊檔移至備份
-                fs::rename(target, &backup_path)?;
-                // 2. 將新暫存檔移入目標
-                if let Err(e) = fs::rename(&temp_path, target) {
-                    // 若失敗，迅速復原舊檔案
-                    let _ = fs::rename(&backup_path, target);
-                    return Err(ImageError::Io(e));
-                }
-                // 3. 移除備份
-                let _ = fs::remove_file(&backup_path);
-                Ok(())
-            } else {
-                fs::rename(&temp_path, target).map_err(ImageError::Io)?;
-                Ok(())
-            }
-        }
-    }
+    write_atomic(target, |writer| {
+        img.write_to(writer, format)?;
+        Ok(())
+    })
 }

@@ -183,6 +183,13 @@ pub(crate) fn actions(ctx: &egui::Context) -> Vec<Action> {
 }
 impl ImageViewerApp {
     pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        if self.geometry.is_some() {
+            self.status_notification = Some((
+                "請先套用或取消編輯草稿，再切換全螢幕".into(),
+                Instant::now(),
+            ));
+            return;
+        }
         self.stop_slideshow();
         self.browsing.fullscreen = !self.browsing.fullscreen;
         self.browsing.moved = Some(Instant::now());

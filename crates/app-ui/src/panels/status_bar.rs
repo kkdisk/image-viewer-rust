@@ -45,6 +45,7 @@ pub struct StatusBarState<'a> {
     pub document: DocumentStatus,
     pub playlist_info: Option<(usize, usize)>,
     pub notification: Option<&'a str>,
+    pub history_details: Option<&'a str>,
 }
 
 pub struct StatusBar;
@@ -53,15 +54,20 @@ impl StatusBar {
     pub fn show(ctx: &egui::Context, state: &StatusBarState<'_>) -> Option<ZoomAction> {
         let mut action = None;
         TopBottomPanel::bottom("bottom_status_bar")
+            .exact_height(64.0)
             .frame(
                 egui::Frame::none()
                     .fill(ThemeColors::BG_PANEL)
                     .inner_margin(Margin::symmetric(12.0, 4.0)),
             )
             .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.spacing_mut().interact_size.y = 24.0;
                 ui.horizontal(|ui| {
                     let (label, color) = state.document.label();
-                    ui.label(RichText::new(label).strong().color(color));
+                    ui.set_min_height(24.0);
+                    ui.label(RichText::new(label).strong().color(color))
+                        .on_hover_text(state.history_details.unwrap_or("尚無編輯歷史"));
                     if state.animated {
                         ui.label("動畫檔（僅顯示第一格）");
                     }
@@ -93,7 +99,8 @@ impl StatusBar {
                             .color(ThemeColors::TEXT_SECONDARY),
                     );
                 });
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
+                    ui.set_min_height(24.0);
                     if let Some((current, total)) = state.playlist_info {
                         ui.label(format!("{} / {total}", current + 1));
                     }
@@ -148,19 +155,26 @@ impl StatusBar {
                         })
                         .on_hover_text("預覽需先套用才可儲存；取消只移除預覽");
                     }
-                    ui.label(
-                        RichText::new("WGPU 硬體加速")
-                            .size(11.0)
-                            .color(ThemeColors::TEXT_MUTED),
+                    // 通知只繪製於工具列剩餘空間，不參與父層高度計算。
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width().max(0.0), 24.0),
+                        egui::Sense::hover(),
                     );
+                    if let Some(message) = state.notification {
+                        let color = ThemeColors::ACCENT_HOVER;
+                        let mut job = egui::text::LayoutJob::simple(
+                            message.to_owned(),
+                            egui::TextStyle::Body.resolve(ui.style()),
+                            color,
+                            rect.width(),
+                        );
+                        job.wrap.max_rows = 1;
+                        let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                        let pos = egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0);
+                        ui.painter().with_clip_rect(rect).galley(pos, galley, color);
+                        response.on_hover_text(message);
+                    }
                 });
-                if let Some(message) = state.notification {
-                    ui.add(
-                        egui::Label::new(RichText::new(message).color(ThemeColors::ACCENT_HOVER))
-                            .truncate(),
-                    )
-                    .on_hover_text(message);
-                }
             });
         action
     }

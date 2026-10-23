@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 /// 預設 Undo 歷史上限步數
 pub const DEFAULT_MAX_HISTORY_STEPS: usize = 20;
+/// 歷史保留的軟預算，必要原圖及目前底圖可超出此值。
+pub const DEFAULT_HISTORY_BYTES: usize = 512 * 1024 * 1024;
 
 /// 歷程節點
 #[derive(Debug, Clone)]
@@ -26,13 +28,15 @@ pub struct HistoryManager {
     future: Vec<HistoryNode>,
     next_id: u64,
     saved_id: u64,
+    original: Arc<RgbaImage>,
+    budget: usize,
 }
 
 impl HistoryManager {
     /// 建立新的歷程管理器，以初始影像作為基底
     pub fn new(initial_image: Arc<RgbaImage>, initial_description: impl Into<String>) -> Self {
         let initial_node = HistoryNode {
-            image: initial_image,
+            image: Arc::clone(&initial_image),
             description: initial_description.into(),
             id: 0,
         };
@@ -44,6 +48,8 @@ impl HistoryManager {
             future: Vec::new(),
             next_id: 1,
             saved_id: 0,
+            original: initial_image,
+            budget: DEFAULT_HISTORY_BYTES,
         }
     }
 
@@ -59,6 +65,41 @@ impl HistoryManager {
     /// 取得目前步數上限
     pub fn max_steps(&self) -> usize {
         self.max_steps
+    }
+
+    pub fn current_id(&self) -> u64 {
+        self.current.id
+    }
+
+    /// 保留影像的配置去重計量，不包含預覽、工作中間值與 GPU。
+    pub fn retained_bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        std::iter::once(&self.original)
+            .chain(std::iter::once(&self.current.image))
+            .chain(self.past.iter().map(|n| &n.image))
+            .chain(self.future.iter().map(|n| &n.image))
+            .filter(|image| seen.insert(Arc::as_ptr(image)))
+            .map(|image| image.as_raw().len())
+            .sum()
+    }
+
+    pub fn budget(&self) -> usize {
+        self.budget
+    }
+
+    pub fn set_budget(&mut self, bytes: usize) {
+        self.budget = bytes;
+        self.trim_budget();
+    }
+
+    fn trim_budget(&mut self) {
+        while self.retained_bytes() > self.budget && !self.past.is_empty() {
+            self.past.remove(0);
+        }
+        // future 的尾端是最近重做，索引零是最遠的未來節點。
+        while self.retained_bytes() > self.budget && !self.future.is_empty() {
+            self.future.remove(0);
+        }
     }
 
     /// 取得目前影像快照引用
@@ -112,6 +153,7 @@ impl HistoryManager {
 
         // 提交新動作時分支清除
         self.future.clear();
+        self.trim_budget();
     }
 
     /// 執行復原 (Undo)

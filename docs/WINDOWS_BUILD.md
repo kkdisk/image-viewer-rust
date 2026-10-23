@@ -1,5 +1,28 @@
 # Windows 建置與驗收
 
+## 0.6.1 介面排版開發版核對（2026-10-23，最新產物）
+
+- 五套件與鎖定檔均為 0.6.1；執行檔確認含完整版本文字。
+- 完整工作區測試 154 項通過、3 項預設忽略；全工作區 Clippy、格式及差異檢查通過。介面案例涵蓋通知切換、最小視窗及高 DPI、分頁保留草稿與畫布、縮圖拖曳及高度還原、舊設定欄位相容。
+- `cargo build --release -p app-ui --locked --offline` 成功；`target/release/app-ui.exe` 為 7,068,672 位元組，小於 15,000,000 位元組。EXE SHA-256：`6c9c1936249363799c49a39d5d73b5d776a5fe74cc7ce9279acf37db4119e364`。
+- ZIP `dist/rust-image-viewer-0.6.1-windows-x64.zip` 為 3,430,882 位元組，僅含與本次執行檔逐位元組相同的 `app-ui.exe`；SHA-256 `93d32921a50c55fbde2fa81ab4d60925596c0b0dbca11697b9896374bc3c30a4`，與檢查碼檔一致。
+- 使用隔離 APPDATA 設定隱藏啟動新版觀察十秒，未提前退出；只終止本輪測試建立的行程。這不替代原生互動驗收。
+- 使用者於 2026-10-23 提供新版畫面並回報排版可接受，授權提交、標籤及推送；未逐項操作的桌面案例仍待驗。遠端 CI 待核對，未公開發布；實作範圍見 [UI 排版契約](UI_LAYOUT_REVIEW.md)。下方 0.6.0 為歷史紀錄。
+
+## 通知列跳動修補（2026-10-23，最新原始碼）
+
+固定通知列高度，新增通知切換的畫布穩定性測試；app-ui 介面測試 7 項通過，app-ui 全目標 Clippy、格式及差異檢查通過。發布重建於替換既有 `target/release/app-ui.exe` 時遭 Windows 拒絕存取（os error 5），因此未完成此次發布重建或重新封裝。下方 0.6.0 執行檔及 ZIP 數據屬修補前產物，不含本次修補。請關閉仍在執行的圖片瀏覽器後重新建置。
+
+## 0.6.0 本機開發版核對（2026-10-23）
+
+- 五個工作區套件與鎖定檔均為 0.6.0，執行檔包含完整版本文字。
+- `cargo test --workspace --locked --offline`：150 項通過、3 項依原設定忽略。包含真實 JPEG EXIF、拍攝時間、八種方向、輸出不重複旋轉、不同縮放／DPI 的裁切角點拖曳、尺寸預覽及歷史預算。
+- `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`、`cargo fmt --all -- --check` 與差異檢查通過；發布組態的輸出測試另有 3 項通過，包含 Windows 目標被鎖定時保留原檔。
+- `cargo build --release -p app-ui --locked --offline` 成功；`target/release/app-ui.exe` 為 7,064,576 位元組，低於 15,000,000 位元組門檻。
+- `dist/rust-image-viewer-0.6.0-windows-x64.zip` 為 3,428,713 位元組，只包含 `app-ui.exe`，內容雜湊與重建執行檔一致。ZIP SHA-256：`09adc8d37edf792d13557d279e3b5b44a243d866027658ccfba9f8cdd9c2bbdb`。
+- 使用隔離的 APPDATA 設定隱藏啟動觀察十秒，未提前退出；這不是互動桌面、GPU 效能或原始 63,198 檔案查重驗收。
+- 原生桌面與遠端 CI 為待驗／Unknown；未建立新標籤、提交或發布。裁切、尺寸、匯出及實際相機照片的資訊／方向請依 [0.6.0 契約](SPEC_EDITING_OUTPUT.md) 驗收。
+
 ## 本機驗證
 
 ```powershell

@@ -15,6 +15,9 @@ pub use histogram_view::{HistogramMode, HistogramWidget};
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
+    Crop,
+    Resize,
+    Export,
     Sampling(crate::preferences::SamplingMode),
     Refresh,
     Delete,
@@ -90,7 +93,7 @@ impl MenuBar {
                 menu_style.spacing.button_padding = egui::vec2(8.0, 4.0);
 
                 menu::bar(ui, |ui| {
-                    ui.menu_button("檔案 (File)", |ui| {
+                    ui.menu_button("檔案", |ui| {
                         if ui.button("📂 開啟圖片 (Open)...       Ctrl+O").clicked() {
                             triggered_action = Some(MenuAction::Open);
                             ui.close_menu();
@@ -130,6 +133,10 @@ impl MenuBar {
                             triggered_action = Some(MenuAction::SaveAs);
                             ui.close_menu();
                         }
+                        if ui.button("匯出副本…").clicked() {
+                            triggered_action = Some(MenuAction::Export);
+                            ui.close_menu();
+                        }
                         ui.separator();
                         if ui.button("❌ 結束 (Exit)").clicked() {
                             triggered_action = Some(MenuAction::Exit);
@@ -137,7 +144,15 @@ impl MenuBar {
                         }
                     });
 
-                    ui.menu_button("編輯 (Edit)", |ui| {
+                    ui.menu_button("編輯", |ui| {
+                        if ui.button("裁切圖片…").clicked() {
+                            triggered_action = Some(MenuAction::Crop);
+                            ui.close_menu();
+                        }
+                        if ui.button("變更圖片尺寸…").clicked() {
+                            triggered_action = Some(MenuAction::Resize);
+                            ui.close_menu();
+                        }
                         for (label, transform) in [
                             ("順時針旋轉 90 度", crate::convenience::Transform::Clockwise),
                             (
@@ -175,7 +190,7 @@ impl MenuBar {
                         }
                     });
 
-                    ui.menu_button("檢視 (View)", |ui| {
+                    ui.menu_button("檢視", |ui| {
                         ui.menu_button("縮放取樣", |ui| {
                             for mode in [
                                 crate::preferences::SamplingMode::Fast,
@@ -269,7 +284,7 @@ impl MenuBar {
                                     }));
                             }
                         });
-                        ui.checkbox(state.show_side_panel, "側邊微調面板");
+                        ui.checkbox(state.show_side_panel, "調整／資訊側欄");
                         ui.checkbox(state.show_filmstrip, "底部縮圖列表 (Filmstrip)");
                         ui.checkbox(state.magnifier_enabled, "🔎 局部放大鏡 (Magnifier)      M");
                         ui.separator();
@@ -291,7 +306,7 @@ impl MenuBar {
                         }
                     });
 
-                    ui.menu_button("工具 (Tools)", |ui| {
+                    ui.menu_button("工具", |ui| {
                         if ui
                             .button("👥 重複圖片檢查器 (Duplicate Finder)...")
                             .clicked()
@@ -301,7 +316,7 @@ impl MenuBar {
                         }
                     });
 
-                    ui.menu_button("說明 (Help)", |ui| {
+                    ui.menu_button("說明", |ui| {
                         if ui.button("快捷鍵說明（F1）").clicked() {
                             triggered_action = Some(MenuAction::Shortcuts);
                             ui.close_menu();
@@ -482,190 +497,202 @@ impl AdjustmentPanel {
                     .inner_margin(Margin::same(12.0)),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("🎨 影像微調")
-                            .strong()
-                            .size(15.0)
-                            .color(ThemeColors::TEXT_PRIMARY),
-                    );
+                Self::contents(ui, state, action);
+            });
+    }
 
-                    if state.is_computing {
-                        ui.label(
-                            RichText::new("⚡ 運算中...")
-                                .size(11.0)
-                                .color(ThemeColors::WARNING),
-                        );
-                    }
+    pub fn contents(
+        ui: &mut egui::Ui,
+        state: &mut AdjustmentPanelState<'_>,
+        action: &mut Option<AdjustmentAction>,
+    ) {
+        if !state.has_image {
+            ui.vertical_centered(|ui| {
+                ui.add_space(30.0);
+                ui.label(
+                    RichText::new("尚未開啟圖片\n請先開啟一張圖片後方可進行微調與直方圖分析")
+                        .color(ThemeColors::TEXT_MUTED)
+                        .size(13.0),
+                );
+            });
+            return;
+        }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("✖").clicked() {
-                            *state.is_open = false;
-                        }
-                    });
-                });
-
+        let mut changed = false;
+        egui::ScrollArea::vertical()
+            .id_salt("adjustment_controls_scroll")
+            .max_height((ui.available_height() - 86.0).max(0.0))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // 即時分佈直方圖
+                HistogramWidget::show(ui, state.histogram_data, state.histogram_mode);
+                ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(8.0);
 
-                if !state.has_image {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(30.0);
-                        ui.label(
-                            RichText::new(
-                                "尚未開啟圖片\n請先開啟一張圖片後方可進行微調與直方圖分析",
-                            )
-                            .color(ThemeColors::TEXT_MUTED)
-                            .size(13.0),
-                        );
-                    });
-                    return;
-                }
-
-                let mut changed = false;
-                egui::ScrollArea::vertical()
-                    .id_salt("adjustment_controls_scroll")
-                    .max_height((ui.available_height() - 86.0).max(0.0))
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.spacing_mut().slider_width =
-                            (ui.available_width() - 104.0).clamp(60.0, 180.0);
-                        // 即時分佈直方圖
-                        HistogramWidget::show(ui, state.histogram_data, state.histogram_mode);
-                        ui.add_space(8.0);
-                        ui.separator();
-                        ui.add_space(8.0);
-
-                        // 1. 白平衡區塊
-                        let white_balance = egui::CollapsingHeader::new(
-                            RichText::new("白平衡")
-                                .strong()
-                                .color(ThemeColors::TEXT_PRIMARY),
-                        )
-                        .id_salt("white_balance")
-                        .open(Some(*state.white_balance_open))
-                        .show(ui, |ui| {
-                            ui.add_space(4.0);
-                            let s_temp = ui.add(
+                // 1. 白平衡區塊
+                let white_balance = egui::CollapsingHeader::new(
+                    RichText::new("白平衡")
+                        .strong()
+                        .color(ThemeColors::TEXT_PRIMARY),
+                )
+                .id_salt("white_balance")
+                .open(Some(*state.white_balance_open))
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    let s_temp = ui
+                        .horizontal(|ui| {
+                            ui.set_min_height(28.0);
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 120.0).max(40.0);
+                            ui.add_sized([44.0, 24.0], egui::Label::new("色溫"));
+                            ui.add(
                                 egui::Slider::new(&mut state.params.temperature, -100..=100)
-                                    .clamping(egui::SliderClamping::Always)
-                                    .text("色溫"),
-                            );
-                            if s_temp.changed() {
-                                changed = true;
-                            }
+                                    .clamping(egui::SliderClamping::Always),
+                            )
+                        })
+                        .inner;
+                    if s_temp.changed() {
+                        changed = true;
+                    }
 
-                            let s_tint = ui.add(
+                    let s_tint = ui
+                        .horizontal(|ui| {
+                            ui.set_min_height(28.0);
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 120.0).max(40.0);
+                            ui.add_sized([44.0, 24.0], egui::Label::new("色調"));
+                            ui.add(
                                 egui::Slider::new(&mut state.params.tint, -100..=100)
-                                    .clamping(egui::SliderClamping::Always)
-                                    .text("色調"),
-                            );
-                            if s_tint.changed() {
-                                changed = true;
-                            }
-                        });
-                        if white_balance.header_response.clicked() {
-                            *state.white_balance_open = !*state.white_balance_open;
-                        }
-
-                        ui.add_space(6.0);
-
-                        // 2. 細部微調區塊
-                        let fine_tune = egui::CollapsingHeader::new(
-                            RichText::new("細部調整")
-                                .strong()
-                                .color(ThemeColors::TEXT_PRIMARY),
-                        )
-                        .id_salt("fine_tune")
-                        .open(Some(*state.fine_tune_open))
-                        .show(ui, |ui| {
-                            ui.add_space(4.0);
-                            let s_bright = ui.add(
-                                egui::Slider::new(&mut state.params.brightness, 0.0..=2.0)
-                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                    .text("亮度"),
-                            );
-                            if s_bright.changed() {
-                                changed = true;
-                            }
-
-                            let s_contrast = ui.add(
-                                egui::Slider::new(&mut state.params.contrast, 0.0..=2.0)
-                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                    .text("對比"),
-                            );
-                            if s_contrast.changed() {
-                                changed = true;
-                            }
-
-                            let s_sat = ui.add(
-                                egui::Slider::new(&mut state.params.saturation, 0.0..=2.0)
-                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
-                                    .text("飽和度"),
-                            );
-                            if s_sat.changed() {
-                                changed = true;
-                            }
-                        });
-                        if fine_tune.header_response.clicked() {
-                            *state.fine_tune_open = !*state.fine_tune_open;
-                        }
-                    });
-
-                if changed {
-                    *action = Some(AdjustmentAction::Change);
+                                    .clamping(egui::SliderClamping::Always),
+                            )
+                        })
+                        .inner;
+                    if s_tint.changed() {
+                        changed = true;
+                    }
+                });
+                if white_balance.header_response.clicked() {
+                    *state.white_balance_open = !*state.white_balance_open;
                 }
 
                 ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
 
-                // 3. 動作按鈕群
-                let is_dirty = !state.params.is_identity();
-                ui.label(
-                    RichText::new(if state.is_computing {
-                        "預覽運算中，完成後即可套用"
-                    } else if is_dirty {
-                        "預覽尚未套用；套用後才可儲存"
-                    } else {
-                        "調整滑桿後可預覽效果"
-                    })
-                    .size(11.0)
-                    .color(ThemeColors::TEXT_SECONDARY),
-                );
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(is_dirty, egui::Button::new("重設"))
-                        .on_hover_text("將預覽參數恢復為預設值")
-                        .clicked()
-                    {
-                        *action = Some(AdjustmentAction::Reset);
+                // 2. 細部微調區塊
+                let fine_tune = egui::CollapsingHeader::new(
+                    RichText::new("細部調整")
+                        .strong()
+                        .color(ThemeColors::TEXT_PRIMARY),
+                )
+                .id_salt("fine_tune")
+                .open(Some(*state.fine_tune_open))
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    let s_bright = ui
+                        .horizontal(|ui| {
+                            ui.set_min_height(28.0);
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 120.0).max(40.0);
+                            ui.add_sized([44.0, 24.0], egui::Label::new("亮度"));
+                            ui.add(
+                                egui::Slider::new(&mut state.params.brightness, 0.0..=2.0)
+                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
+                            )
+                        })
+                        .inner;
+                    if s_bright.changed() {
+                        changed = true;
                     }
 
-                    if ui
-                        .add_enabled(is_dirty, egui::Button::new("取消"))
-                        .on_hover_text("移除預覽，保留已套用的編輯")
-                        .clicked()
-                    {
-                        *action = Some(AdjustmentAction::Cancel);
+                    let s_contrast = ui
+                        .horizontal(|ui| {
+                            ui.set_min_height(28.0);
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 120.0).max(40.0);
+                            ui.add_sized([44.0, 24.0], egui::Label::new("對比"));
+                            ui.add(
+                                egui::Slider::new(&mut state.params.contrast, 0.0..=2.0)
+                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
+                            )
+                        })
+                        .inner;
+                    if s_contrast.changed() {
+                        changed = true;
                     }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let apply_btn = egui::Button::new(
-                            RichText::new("套用").strong().color(egui::Color32::WHITE),
-                        )
+                    let s_sat = ui
+                        .horizontal(|ui| {
+                            ui.set_min_height(28.0);
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 120.0).max(40.0);
+                            ui.add_sized([44.0, 24.0], egui::Label::new("飽和度"));
+                            ui.add(
+                                egui::Slider::new(&mut state.params.saturation, 0.0..=2.0)
+                                    .custom_formatter(|n, _| format!("{:.0}%", n * 100.0)),
+                            )
+                        })
+                        .inner;
+                    if s_sat.changed() {
+                        changed = true;
+                    }
+                });
+                if fine_tune.header_response.clicked() {
+                    *state.fine_tune_open = !*state.fine_tune_open;
+                }
+            });
+
+        if changed {
+            *action = Some(AdjustmentAction::Change);
+        }
+
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        // 3. 動作按鈕群
+        let is_dirty = !state.params.is_identity();
+        ui.label(
+            RichText::new(if state.is_computing {
+                "預覽運算中，完成後即可套用"
+            } else if is_dirty {
+                "預覽尚未套用；套用後才可儲存"
+            } else {
+                "調整滑桿後可預覽效果"
+            })
+            .size(11.0)
+            .color(ThemeColors::TEXT_SECONDARY),
+        );
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(is_dirty, egui::Button::new("重設"))
+                .on_hover_text("將預覽參數恢復為預設值")
+                .clicked()
+            {
+                *action = Some(AdjustmentAction::Reset);
+            }
+
+            if ui
+                .add_enabled(is_dirty, egui::Button::new("取消"))
+                .on_hover_text("移除預覽，保留已套用的編輯")
+                .clicked()
+            {
+                *action = Some(AdjustmentAction::Cancel);
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let apply_btn =
+                    egui::Button::new(RichText::new("套用").strong().color(egui::Color32::WHITE))
                         .fill(ThemeColors::ACCENT);
 
-                        if ui
-                            .add_enabled(is_dirty && !state.is_computing, apply_btn)
-                            .on_hover_text("將目前預覽加入編輯歷史，再使用 Ctrl+S 儲存")
-                            .clicked()
-                        {
-                            *action = Some(AdjustmentAction::Apply);
-                        }
-                    });
-                });
+                if ui
+                    .add_enabled(is_dirty && !state.is_computing, apply_btn)
+                    .on_hover_text("將目前預覽加入編輯歷史，再使用 Ctrl+S 儲存")
+                    .clicked()
+                {
+                    *action = Some(AdjustmentAction::Apply);
+                }
             });
+        });
     }
 }
 

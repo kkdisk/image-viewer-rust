@@ -5,6 +5,8 @@ use thiserror::Error;
 /// 影像處理核心錯誤
 #[derive(Debug, Error)]
 pub enum ImageError {
+    #[error("編輯參數無效：{0}")]
+    InvalidEdit(&'static str),
     /// 檔案 I/O 錯誤
     #[error("檔案 I/O 錯誤: {0}")]
     Io(#[from] std::io::Error),

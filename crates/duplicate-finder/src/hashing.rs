@@ -1,7 +1,7 @@
 //! 檔案雜湊 (MD5) 與感知雜湊 (pHash / DCT) 計算模組
 
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -34,17 +34,18 @@ fn compute_dct_cos_table(n: usize) -> Vec<f64> {
 /// 計算單一檔案之 MD5 雜湊值 (以 64KB 緩衝區串流讀取，不佔用巨量記憶體)
 pub fn compute_md5<P: AsRef<Path>>(path: P) -> Result<String, DuplicateError> {
     let path_ref = path.as_ref();
-    let file = File::open(path_ref).map_err(|e| DuplicateError::IoError {
+    let mut file = File::open(path_ref).map_err(|e| DuplicateError::IoError {
         path: path_ref.to_path_buf(),
         source: e,
     })?;
 
-    let mut reader = BufReader::with_capacity(65536, file);
     let mut hasher = Md5::new();
-    let mut buffer = [0u8; 65536];
+    // 平行工作可能巢狀分割，避免大型陣列隨內嵌呼叫累積於工作執行緒堆疊。
+    // 直接串流讀入堆積緩衝區，亦不再額外配置一份 BufReader 緩衝。
+    let mut buffer = vec![0u8; 65536];
 
     loop {
-        let bytes_read = reader
+        let bytes_read = file
             .read(&mut buffer)
             .map_err(|e| DuplicateError::IoError {
                 path: path_ref.to_path_buf(),

@@ -41,6 +41,7 @@ pub struct Preferences {
     pub maximized: bool,
     pub side_panel: bool,
     pub filmstrip: bool,
+    pub filmstrip_height: f32,
     pub magnifier_enabled: bool,
     pub magnifier_zoom: u32,
     pub histogram_mode: u8,
@@ -64,6 +65,7 @@ impl Default for Preferences {
             maximized: false,
             side_panel: true,
             filmstrip: true,
+            filmstrip_height: 110.0,
             magnifier_enabled: false,
             magnifier_zoom: 4,
             histogram_mode: 0,
@@ -107,6 +109,11 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
                 && removed.opened_ms >= entry.opened_ms
         })
     });
+    settings.filmstrip_height = if settings.filmstrip_height.is_finite() {
+        settings.filmstrip_height.clamp(110.0, 220.0)
+    } else {
+        110.0
+    };
     settings.window_size[0] = settings.window_size[0].clamp(800.0, 7680.0);
     settings.window_size[1] = settings.window_size[1].clamp(600.0, 4320.0);
     if ![2, 4, 8].contains(&settings.magnifier_zoom) {
@@ -340,6 +347,7 @@ impl crate::app::ImageViewerApp {
         self.playlist.set_sort(settings.sort);
         self.show_side_panel = settings.side_panel;
         self.show_filmstrip = settings.filmstrip;
+        self.filmstrip_height = settings.filmstrip_height;
         self.magnifier_enabled = settings.magnifier_enabled;
         self.magnifier_zoom = settings.magnifier_zoom;
         self.white_balance_open = settings.white_balance_open;
@@ -358,6 +366,7 @@ impl crate::app::ImageViewerApp {
         let mut settings = self.preferences.current.clone();
         settings.side_panel = self.show_side_panel;
         settings.filmstrip = self.show_filmstrip;
+        settings.filmstrip_height = self.filmstrip_height;
         settings.magnifier_enabled = self.magnifier_enabled;
         settings.magnifier_zoom = self.magnifier_zoom;
         settings.white_balance_open = self.white_balance_open;
@@ -613,6 +622,7 @@ mod tests {
         let settings = Preferences {
             side_panel: false,
             filmstrip: false,
+            filmstrip_height: 180.0,
             magnifier_enabled: true,
             magnifier_zoom: 8,
             histogram_mode: 4,
@@ -624,6 +634,8 @@ mod tests {
         let mut app = crate::app::ImageViewerApp::default();
         app.configure_preferences(settings.clone(), Some(path.clone()));
         assert!(!app.show_side_panel && !app.show_filmstrip);
+        assert_eq!(app.filmstrip_height, 180.0);
+        app.filmstrip_height = 196.0;
         assert!(app.magnifier_enabled);
         assert_eq!(app.magnifier_zoom, 8);
         assert_eq!(app.histogram_mode, crate::panels::HistogramMode::Luma);
@@ -645,6 +657,7 @@ mod tests {
             load(&path).unwrap(),
             Preferences {
                 window_size: [1100.0, 750.0],
+                filmstrip_height: 196.0,
                 ..settings
             }
         );
@@ -679,5 +692,18 @@ mod tests {
         }
         #[cfg(not(windows))]
         assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+    #[test]
+    fn old_preferences_default_filmstrip_height_and_clamp_invalid_sizes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        for (json, expected) in [
+            (r#"{"version":1}"#, 110.0),
+            (r#"{"version":2,"filmstrip_height":-100}"#, 110.0),
+            (r#"{"version":2,"filmstrip_height":9000}"#, 220.0),
+        ] {
+            std::fs::write(&path, json).unwrap();
+            assert_eq!(load(&path).unwrap().filmstrip_height, expected);
+        }
     }
 }
