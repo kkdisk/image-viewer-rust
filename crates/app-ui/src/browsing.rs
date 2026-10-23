@@ -14,6 +14,7 @@ pub(crate) enum Action {
     Refresh,
     Delete,
     Slideshow,
+    CopyImage,
     CopyPath,
     Open,
     Save,
@@ -55,6 +56,14 @@ macro_rules! binding {
     };
 }
 const BINDINGS: &[Binding] = &[
+    binding!(
+        &[Key::C],
+        true,
+        Some(false),
+        "Ctrl+C",
+        "複製圖片",
+        CopyImage
+    ),
     binding!(
         &[Key::F5],
         false,
@@ -176,6 +185,22 @@ pub(crate) fn actions(ctx: &egui::Context) -> Vec<Action> {
                 && !result.contains(&binding.action)
             {
                 result.push(binding.action);
+            }
+        }
+        // 原生桌面會將複製按鍵轉為 Copy 事件，不一定提供 Key::C。
+        if !input.modifiers.alt
+            && input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Copy))
+        {
+            let action = if input.modifiers.shift {
+                Action::CopyPath
+            } else {
+                Action::CopyImage
+            };
+            if !result.contains(&action) {
+                result.push(action);
             }
         }
         result
@@ -319,6 +344,47 @@ mod tests {
             BINDINGS
                 .iter()
                 .any(|binding| binding.action == Action::Help && binding.label == "F1")
+        );
+    }
+    #[test]
+    fn 原生複製事件與按鍵共用派送且保留來源路徑快捷鍵() {
+        let ctx = egui::Context::default();
+        for (shift, expected) in [(false, Action::CopyImage), (true, Action::CopyPath)] {
+            let modifiers = egui::Modifiers {
+                command: true,
+                ctrl: true,
+                shift,
+                ..Default::default()
+            };
+            for events in [
+                vec![egui::Event::Copy],
+                vec![
+                    egui::Event::Copy,
+                    egui::Event::Key {
+                        key: Key::C,
+                        physical_key: Some(Key::C),
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    },
+                ],
+            ] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        modifiers,
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        assert!(actions(ctx) == vec![expected]);
+                    },
+                );
+            }
+        }
+        assert!(
+            BINDINGS
+                .iter()
+                .any(|b| b.action == Action::CopyImage && b.label == "Ctrl+C")
         );
     }
 }

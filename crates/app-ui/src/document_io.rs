@@ -57,7 +57,7 @@ enum Completion {
         path: PathBuf,
         image: Arc<RgbaImage>,
         result: Result<Box<ImagePlaylist>, String>,
-        info: crate::convenience::FileInfo,
+        info: Box<crate::convenience::FileInfo>,
     },
 }
 
@@ -146,7 +146,9 @@ impl Default for DocumentIo {
                                 if version.load(Ordering::SeqCst) != task.id {
                                     return None;
                                 }
-                                if !task.reference && !task.playlist.try_select_existing(&task.path)
+                                if !task.reference
+                                    && !task.playlist.try_select_existing(&task.path)
+                                    && !task.playlist.contains_source(&task.path)
                                 {
                                     task.playlist.scan_from_file(&task.path);
                                 }
@@ -187,7 +189,7 @@ impl Default for DocumentIo {
                         .map_err(|error| error.to_string());
                         Completion::Write {
                             id,
-                            info: crate::convenience::FileInfo::read(&path),
+                            info: Box::new(crate::convenience::FileInfo::read(&path)),
                             path,
                             image,
                             result: result.map(Box::new),
@@ -440,7 +442,7 @@ impl ImageViewerApp {
                                 session.set_source_path(path);
                                 session.mark_saved();
                                 self.animated_source = false;
-                                self.convenience.info = info;
+                                self.convenience.info = *info;
                                 self.playlist = *playlist;
                             }
                             if !matches_current {

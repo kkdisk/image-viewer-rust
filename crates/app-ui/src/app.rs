@@ -19,6 +19,8 @@ use crate::thumbnail_loader::ThumbnailManager;
 
 /// 主圖片瀏覽與編輯桌面應用狀態
 pub struct ImageViewerApp {
+    pub(crate) image_clipboard: crate::image_clipboard::ImageClipboard,
+    pub(crate) photo_browser: crate::photo_browser::PhotoBrowser,
     pub(crate) presets: crate::toning_presets::PresetState,
     pub(crate) geometry: Option<crate::geometry_editor::GeometryDraft>,
     pub(crate) export: crate::export_dialog::ExportState,
@@ -109,6 +111,8 @@ pub struct ImageViewerApp {
 impl Default for ImageViewerApp {
     fn default() -> Self {
         Self {
+            image_clipboard: Default::default(),
+            photo_browser: Default::default(),
             presets: Default::default(),
             geometry: None,
             export: Default::default(),
@@ -371,12 +375,23 @@ impl ImageViewerApp {
             .as_ref()
             .map_or(loaded.opened_path, |archive| archive.archive_path.clone());
         self.record_recent(recent_path);
+        // 開圖期間日期索引或篩選可能已更新；同一來源清單採用介面最新狀態。
+        if loaded.playlist.catalog_revision() == self.playlist.catalog_revision() {
+            // 交換所有權可避免在介面執行緒再次完整複製來源清單。
+            std::mem::swap(&mut loaded.playlist, &mut self.playlist);
+            if self.session.as_ref().and_then(|s| s.source_path()) == Some(loaded.path.as_path()) {
+                loaded.playlist.try_select_existing(&loaded.path);
+            } else {
+                loaded.playlist.select_opened_file(&loaded.path);
+            }
+        }
         loaded.playlist.set_sort(self.preferences.current.sort);
         self.debouncer.cancel_pending();
         self.pending_adjustment = None;
         self.thumbnail_manager
             .set_scope(loaded.playlist.cache_scope());
         self.playlist = loaded.playlist;
+        self.photo_browser.grid_open = false;
         self.session = Some(EditingSession::new(loaded.pixels, Some(loaded.path)));
         self.slider_params = AdjustmentParams::default();
         self.viewport.reset_fit_window();
@@ -797,6 +812,12 @@ impl ImageViewerApp {
             return;
         }
         for action in actions {
+            // 標籤選字不會取得鍵盤焦點；其文字輸出要到 egui 幀結束才產生。
+            if matches!(action, Action::CopyImage | Action::CopyPath)
+                && egui::text_selection::LabelSelectionState::load(ctx).has_selection()
+            {
+                continue;
+            }
             match action {
                 Action::Refresh => self.refresh_directory(true),
                 Action::Delete => {
@@ -805,6 +826,7 @@ impl ImageViewerApp {
                 Action::Slideshow => {
                     self.toggle_slideshow(ctx);
                 }
+                Action::CopyImage => self.copy_image(),
                 Action::CopyPath => self.copy_source_path(ctx),
                 Action::Open => self.open_file_dialog(),
                 Action::Save => {
@@ -856,6 +878,7 @@ impl eframe::App for ImageViewerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_image_clipboard(ctx);
         self.poll_presets();
         self.poll_export();
         if self.geometry.as_ref().is_some_and(|d| {
@@ -871,6 +894,7 @@ impl eframe::App for ImageViewerApp {
         self.update_slideshow(ctx);
         self.update_preferences(ctx);
         self.poll_document_io();
+        self.poll_photo_browser(ctx);
         if self.io_needs_repaint() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
@@ -955,7 +979,9 @@ impl eframe::App for ImageViewerApp {
             let can_undo = self.session.as_ref().map(|s| s.can_undo()).unwrap_or(false);
             let can_redo = self.session.as_ref().map(|s| s.can_redo()).unwrap_or(false);
 
+            let can_copy_image = self.can_copy_image();
             let mut menu_state = crate::panels::MenuBarState {
+                can_copy_image,
                 sampling: self.preferences.current.sampling,
                 slideshow_seconds: self.preferences.current.slideshow_seconds,
                 slideshow_loop: self.preferences.current.slideshow_loop,
@@ -1014,6 +1040,7 @@ impl eframe::App for ImageViewerApp {
                         self.convenience.info_tab = true;
                         self.show_side_panel = true;
                     }
+                    crate::panels::MenuAction::CopyImage => self.copy_image(),
                     crate::panels::MenuAction::CopyPath => self.copy_source_path(ctx),
                     crate::panels::MenuAction::Transform(transform) => {
                         if !self.transform_image(transform) {
@@ -1095,6 +1122,7 @@ impl eframe::App for ImageViewerApp {
                 return;
             }
 
+            self.show_photo_toolbar(ctx);
             let history_details = self.history_details();
             // 6. 底部狀態列
             let (filename, dimensions) = match &self.session {
@@ -1152,22 +1180,23 @@ impl eframe::App for ImageViewerApp {
             let mut do_prev = false;
             let mut do_next = false;
 
-            FilmstripPanel::show(
-                ctx,
-                &mut self.show_filmstrip,
-                &self.playlist,
-                &mut self.thumbnail_manager,
-                &mut |idx| nav_to_idx = Some(idx),
-                &mut self.filmstrip_height,
-                &mut |direction| {
-                    if direction < 0 {
-                        do_prev = true;
-                    } else {
-                        do_next = true;
-                    }
-                },
-            );
-
+            if !self.photo_browser.grid_open {
+                FilmstripPanel::show(
+                    ctx,
+                    &mut self.show_filmstrip,
+                    &self.playlist,
+                    &mut self.thumbnail_manager,
+                    &mut |idx| nav_to_idx = Some(idx),
+                    &mut self.filmstrip_height,
+                    &mut |direction| {
+                        if direction < 0 {
+                            do_prev = true;
+                        } else {
+                            do_next = true;
+                        }
+                    },
+                );
+            }
             if let Some(idx) = nav_to_idx {
                 self.navigate_to(idx);
             }
@@ -1185,7 +1214,9 @@ impl eframe::App for ImageViewerApp {
 
             // 8. 側邊微調面板
             let mut adjustment_action = None;
-            self.show_inspector(ctx, &mut adjustment_action);
+            if !self.photo_browser.grid_open {
+                self.show_inspector(ctx, &mut adjustment_action);
+            }
 
             match adjustment_action {
                 Some(crate::panels::AdjustmentAction::Change) => self.queue_toning_preview(),
@@ -1216,6 +1247,10 @@ impl eframe::App for ImageViewerApp {
         CentralPanel::default()
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
+                if self.photo_browser.grid_open && !self.browsing.fullscreen {
+                    self.show_photo_grid(ui);
+                    return;
+                }
                 let dims = self.session.as_ref().map(|s| {
                     let img = s.active_image();
                     (img.width(), img.height())
@@ -1705,5 +1740,98 @@ mod convenience_shortcut_tests {
         key(&mut app, &ctx, Key::Escape);
         assert!(!app.slideshow.playing && !app.browsing.fullscreen);
         assert!(app.convenience.info_open);
+    }
+}
+
+#[cfg(test)]
+mod image_copy_shortcut_tests {
+    use super::*;
+    #[test]
+    fn 文字欄位取得焦點時不將原生複製事件派送成圖片() {
+        let ctx = egui::Context::default();
+        // 沒有圖片，測試失敗時也不會觸碰系統剪貼簿。
+        let mut app = ImageViewerApp::default();
+        let mut text = "選取文字".to_owned();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+            });
+        });
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Copy],
+                ..Default::default()
+            },
+            |ctx| {
+                assert!(ctx.wants_keyboard_input());
+                app.handle_shortcuts(ctx);
+            },
+        );
+        assert!(app.status_notification.is_none());
+        assert!(!app.image_clipboard.is_pending());
+        assert_eq!(text, "選取文字");
+    }
+}
+
+#[cfg(test)]
+mod selected_label_copy_tests {
+    use super::*;
+    #[test]
+    fn 標籤選字後原生複製只輸出文字且不派送圖片() {
+        let ctx = egui::Context::default();
+        // 無圖片確保舊碼重現時也不觸碰使用者的系統剪貼簿。
+        let mut app = ImageViewerApp::default();
+        let mut draw = |events| {
+            let mut rect = egui::Rect::NOTHING;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.handle_shortcuts(ctx);
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        rect = ui
+                            .add(egui::Label::new("Canon EOS 80D").selectable(true))
+                            .rect;
+                    });
+                },
+            );
+            (output, rect)
+        };
+        let (_, rect) = draw(vec![]);
+        let start = egui::pos2(rect.left() + 1.0, rect.center().y);
+        let end = egui::pos2(rect.right() - 1.0, rect.center().y);
+        draw(vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ]);
+        draw(vec![egui::Event::PointerMoved(end)]);
+        draw(vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }]);
+        assert!(!ctx.wants_keyboard_input());
+        let (output, _) = draw(vec![egui::Event::Copy]);
+        assert!(
+            !output.platform_output.copied_text.is_empty(),
+            "測資必須真的選取並複製標籤文字"
+        );
+        assert!(
+            app.status_notification.is_none(),
+            "標籤文字複製不得派送為圖片複製"
+        );
+        assert!(!app.image_clipboard.is_pending());
     }
 }

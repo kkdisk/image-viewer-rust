@@ -5,12 +5,24 @@ use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
 
 fn photo(orientation: u16, original: Option<&str>, offset: Option<&str>) -> Vec<u8> {
+    photo_with_camera(orientation, original, offset, None, None)
+}
+
+fn photo_with_camera(
+    orientation: u16,
+    original: Option<&str>,
+    offset: Option<&str>,
+    make: Option<&str>,
+    model: Option<&str>,
+) -> Vec<u8> {
     let mut fields = vec![Field {
         tag: Tag::Orientation,
         ifd_num: In::PRIMARY,
         value: Value::Short(vec![orientation]),
     }];
     for (tag, value) in [
+        (Tag::Make, make),
+        (Tag::Model, model),
         (Tag::DateTimeOriginal, original),
         (Tag::SubSecTimeOriginal, Some("125")),
         (Tag::OffsetTimeOriginal, offset),
@@ -43,6 +55,31 @@ fn photo(orientation: u16, original: Option<&str>, offset: Option<&str>) -> Vec<
     output.extend_from_slice(tiff.get_ref());
     output.extend_from_slice(&jpeg.into_inner()[2..]);
     output
+}
+
+#[test]
+fn 相機資訊僅顯示有效品牌型號且不重複品牌() {
+    for (make, model, expected) in [
+        (Some("Canon"), Some("EOS 80D"), Some("Canon EOS 80D")),
+        (Some("Canon"), Some("Canon EOS 80D"), Some("Canon EOS 80D")),
+        (Some("Canon"), Some("CANON EOS 80D"), Some("CANON EOS 80D")),
+        (Some(" Sony \0"), None, Some("Sony")),
+        (None, Some("ILCE-7M4"), Some("ILCE-7M4")),
+        (Some(" \0"), Some("\t"), None),
+        (Some("Canon\n無效"), Some("EOS 80D"), Some("EOS 80D")),
+        (None, None, None),
+    ] {
+        let bytes = photo_with_camera(1, None, None, make, model);
+        let photo = read_photo_metadata_from_reader(&mut Cursor::new(&bytes));
+        assert_eq!(photo.camera_label().as_deref(), expected);
+    }
+    let long_model = "x".repeat(65);
+    let bytes = photo_with_camera(1, None, None, None, Some(&long_model));
+    assert!(
+        read_photo_metadata_from_reader(&mut Cursor::new(bytes))
+            .camera_label()
+            .is_none()
+    );
 }
 
 #[test]

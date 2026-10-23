@@ -30,6 +30,7 @@ pub enum MenuAction {
     ConfirmDelete,
     Info,
     Transform(crate::convenience::Transform),
+    CopyImage,
     CopyPath,
     OpenFolder,
     OpenRecent(usize),
@@ -50,6 +51,7 @@ pub enum MenuAction {
 
 /// 選單狀態與切換開關
 pub struct MenuBarState<'a> {
+    pub can_copy_image: bool,
     pub sampling: crate::preferences::SamplingMode,
     pub slideshow_seconds: u64,
     pub slideshow_loop: bool,
@@ -169,7 +171,21 @@ impl MenuBar {
                                 ui.close_menu();
                             }
                         }
-                        if ui.button("複製來源路徑").clicked() {
+                        if ui
+                            .add_enabled(
+                                state.can_copy_image,
+                                egui::Button::new("複製圖片       Ctrl+C"),
+                            )
+                            .on_disabled_hover_text(
+                                "請先開啟圖片、套用或取消預覽，並等待目前工作完成",
+                            )
+                            .on_hover_text("複製已套用編輯的完整解析度影像，可貼到聊天或文件")
+                            .clicked()
+                        {
+                            triggered_action = Some(MenuAction::CopyImage);
+                            ui.close_menu();
+                        }
+                        if ui.button("複製來源路徑       Ctrl+Shift+C").clicked() {
                             triggered_action = Some(MenuAction::CopyPath);
                             ui.close_menu();
                         }
@@ -262,6 +278,10 @@ impl MenuBar {
                         ui.menu_button("排序", |ui| {
                             for (mode, label) in [
                                 (crate::playlist::SortMode::Natural, "自然檔名"),
+                                (
+                                    crate::playlist::SortMode::Captured,
+                                    "拍攝時間（相機當地時間）",
+                                ),
                                 (crate::playlist::SortMode::Modified, "修改日期"),
                                 (crate::playlist::SortMode::Size, "檔案大小"),
                             ] {

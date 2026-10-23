@@ -10,6 +10,8 @@ use image::DynamicImage;
 /// 原始檔案的唯讀拍攝資訊；不將檔案修改時間當作拍攝時間。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PhotoMetadata {
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
     pub captured_at: Option<String>,
     pub datetime_source: Option<&'static str>,
     pub timezone: Option<String>,
@@ -17,6 +19,25 @@ pub struct PhotoMetadata {
 }
 
 impl PhotoMetadata {
+    /// 型號若已包含品牌前綴，避免同一品牌重複顯示。
+    pub fn camera_label(&self) -> Option<String> {
+        match (&self.camera_make, &self.camera_model) {
+            (Some(make), Some(model))
+                if model
+                    .get(..make.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(make))
+                    && model
+                        .as_bytes()
+                        .get(make.len())
+                        .is_none_or(u8::is_ascii_whitespace) =>
+            {
+                Some(model.clone())
+            }
+            (Some(make), Some(model)) => Some(format!("{make} {model}")),
+            (Some(value), None) | (None, Some(value)) => Some(value.clone()),
+            (None, None) => None,
+        }
+    }
     pub fn orientation_label(&self) -> &'static str {
         match self.orientation {
             Some(1) => "正常方向",
@@ -59,6 +80,8 @@ pub fn read_photo_metadata_from_reader<R: BufRead + Seek>(reader: &mut R) -> Pho
         .and_then(|f| f.value.get_uint(0))
         .filter(|v| (1..=8).contains(v));
     let mut result = PhotoMetadata {
+        camera_make: ascii(Tag::Make),
+        camera_model: ascii(Tag::Model),
         orientation,
         ..Default::default()
     };

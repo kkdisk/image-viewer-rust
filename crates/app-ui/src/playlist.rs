@@ -10,6 +10,7 @@ pub enum SortMode {
     #[default]
     Natural,
     Modified,
+    Captured,
     Size,
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,11 +34,28 @@ pub fn is_supported_image(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum DateFilter {
+    #[default]
+    All,
+    Day(String),
+    Undated,
+}
+static NEXT_CATALOG_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+fn next_catalog_revision() -> u64 {
+    NEXT_CATALOG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 圖片清單與導覽管理器
 #[derive(Debug, Default, Clone)]
 pub struct ImagePlaylist {
     /// 當前目錄下的所有圖片路徑（依檔案名稱排序）
     files: Vec<PathBuf>,
+    all_files: Vec<PathBuf>,
+    captured: HashMap<PathBuf, String>,
+    dates_indexed: bool,
+    date_filter: DateFilter,
+    catalog_revision: u64,
     /// 目前正在檢視的圖片在清單中的索引
     current_index: Option<usize>,
     /// 目前清單所屬的目錄
@@ -52,6 +70,9 @@ impl ImagePlaylist {
         let index = self.files.iter().position(|p| p == path).unwrap_or(0);
         self.files.retain(|p| p != path);
         self.attributes.remove(path);
+        self.all_files.retain(|p| p != path);
+        self.captured.remove(path);
+        self.catalog_revision = next_catalog_revision();
         self.current_index = if self.files.is_empty() {
             None
         } else {
@@ -98,6 +119,7 @@ impl ImagePlaylist {
         });
 
         self.files = image_files;
+        self.reset_catalog();
         self.current_index = current_idx;
         self.current_dir = Some(parent);
         self.refresh_metadata();
@@ -106,6 +128,7 @@ impl ImagePlaylist {
     /// 設定自訂圖片清單（如從壓縮包解壓出的圖片集）
     pub fn set_custom_list(&mut self, files: Vec<PathBuf>) {
         self.files = files;
+        self.reset_catalog();
         self.current_index = if self.files.is_empty() { None } else { Some(0) };
         self.current_dir = None;
         self.attributes.clear();
@@ -114,8 +137,11 @@ impl ImagePlaylist {
 
     /// 只在背景載入工作使用，避免排序時於介面執行緒查詢檔案資料。
     pub fn refresh_metadata(&mut self) {
+        self.catalog_revision = next_catalog_revision();
+        self.captured.clear();
+        self.dates_indexed = false;
         self.attributes = self
-            .files
+            .all_files
             .iter()
             .filter_map(|path| {
                 let metadata = fs::metadata(path).ok()?;
@@ -131,6 +157,7 @@ impl ImagePlaylist {
             .map(|entry| entry.path())
             .filter(|path| path.is_file() && is_supported_image(path))
             .collect();
+        self.reset_catalog();
         self.current_index = None;
         self.current_dir = Some(dir.to_path_buf());
         self.refresh_metadata();
@@ -141,7 +168,8 @@ impl ImagePlaylist {
     pub fn set_sort(&mut self, sort: SortOptions) {
         let selected = self.current_file().cloned();
         let attributes = &self.attributes;
-        self.files.sort_by(|a, b| {
+        let captured = &self.captured;
+        self.all_files.sort_by(|a, b| {
             let natural = || {
                 core_archive::natural_cmp(
                     &a.file_name().unwrap_or_default().to_string_lossy(),
@@ -156,6 +184,9 @@ impl ImagePlaylist {
                         natural()
                     }
                 }
+                SortMode::Captured => {
+                    compare_optional(captured.get(a), captured.get(b), sort.descending)
+                }
                 SortMode::Modified => compare_optional(
                     attributes.get(a).and_then(|entry| entry.1),
                     attributes.get(b).and_then(|entry| entry.1),
@@ -169,9 +200,70 @@ impl ImagePlaylist {
             };
             primary.then_with(natural).then_with(|| a.cmp(b))
         });
-        self.current_index =
-            selected.and_then(|path| self.files.iter().position(|candidate| candidate == &path));
         self.sort = sort;
+        self.rebuild_visible(selected.as_deref());
+    }
+
+    fn reset_catalog(&mut self) {
+        self.all_files = self.files.clone();
+        self.captured.clear();
+        self.dates_indexed = false;
+        self.date_filter = DateFilter::All;
+        self.catalog_revision = next_catalog_revision();
+    }
+    fn rebuild_visible(&mut self, selected: Option<&Path>) {
+        self.files = self
+            .all_files
+            .iter()
+            .filter(|path| match &self.date_filter {
+                DateFilter::All => true,
+                DateFilter::Day(day) => self
+                    .captured
+                    .get(*path)
+                    .is_some_and(|date| date.starts_with(day)),
+                DateFilter::Undated => self.dates_indexed && !self.captured.contains_key(*path),
+            })
+            .cloned()
+            .collect();
+        self.current_index = selected.and_then(|p| self.files.iter().position(|file| file == p));
+    }
+    pub fn set_captured_dates(&mut self, dates: HashMap<PathBuf, String>) {
+        self.captured = dates;
+        self.dates_indexed = true;
+        self.set_sort(self.sort);
+    }
+    pub fn date_filter(&self) -> &DateFilter {
+        &self.date_filter
+    }
+    pub fn dates_indexed(&self) -> bool {
+        self.dates_indexed
+    }
+    pub fn contains_source(&self, path: &Path) -> bool {
+        self.all_files.iter().any(|file| file == path)
+    }
+    /// 明確開啟已知但被篩除的圖片時，清除條件以恢復導覽位置。
+    pub fn select_opened_file(&mut self, path: &Path) -> bool {
+        if self.try_select_existing(path) {
+            return true;
+        }
+        if !self.contains_source(path) {
+            return false;
+        }
+        self.set_date_filter(DateFilter::All, Some(path));
+        true
+    }
+    pub fn set_date_filter(&mut self, filter: DateFilter, selected: Option<&Path>) {
+        self.date_filter = filter;
+        self.rebuild_visible(selected);
+    }
+    pub fn captured_at(&self, path: &Path) -> Option<&str> {
+        self.captured.get(path).map(String::as_str)
+    }
+    pub fn all_files(&self) -> &[PathBuf] {
+        &self.all_files
+    }
+    pub fn catalog_revision(&self) -> u64 {
+        self.catalog_revision
     }
 
     /// 在現有清單中更新目前檔案之索引（若檔案已在清單中則不重新掃描目錄）
@@ -209,7 +301,7 @@ impl ImagePlaylist {
     pub fn cache_scope(&self) -> Option<PathBuf> {
         self.current_dir
             .clone()
-            .or_else(|| self.files.first()?.parent().map(Path::to_path_buf))
+            .or_else(|| self.all_files.first()?.parent().map(Path::to_path_buf))
     }
 
     /// 取得目前指向的檔案路徑
@@ -295,6 +387,23 @@ fn compare_optional<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) -> std
 mod tests {
     use super::*;
     #[test]
+    fn 未完成日期索引不得把尚未讀取的來源當成無日期() {
+        let mut list = ImagePlaylist::new();
+        let a = PathBuf::from("有日期.png");
+        let b = PathBuf::from("無日期.png");
+        list.set_custom_list(vec![a.clone(), b.clone()]);
+        list.set_date_filter(DateFilter::Undated, None);
+        assert!(list.is_empty());
+        let dates = HashMap::from([(a, "2025-01-01 10:00:00".into())]);
+        list.set_captured_dates(dates.clone());
+        assert_eq!(list.files(), std::slice::from_ref(&b));
+        list.refresh_metadata();
+        assert!(list.is_empty());
+        assert_eq!(list.date_filter(), &DateFilter::Undated);
+        list.set_captured_dates(dates);
+        assert_eq!(list.files(), std::slice::from_ref(&b));
+    }
+    #[test]
     fn natural_and_metadata_sorts_preserve_selection() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("相片2.png");
@@ -338,5 +447,64 @@ mod tests {
             core_archive::natural_cmp("x100000000000000000000", "x99999999999999999999"),
             std::cmp::Ordering::Greater
         );
+    }
+    #[test]
+    fn 拍攝排序未知置後且篩選可恢復完整清單與選取() {
+        let mut list = ImagePlaylist::new();
+        let paths: Vec<PathBuf> = ["相片10.jpg", "相片2.jpg", "早期.jpg", "未知.jpg"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        list.set_custom_list(paths.clone());
+        let revision = list.catalog_revision();
+        list.set_captured_dates(HashMap::from([
+            (paths[0].clone(), "2025-01-02 10:00:00".into()),
+            (paths[1].clone(), "2025-01-02 10:00:00".into()),
+            (paths[2].clone(), "2024-12-01 10:00:00".into()),
+        ]));
+        list.try_select_existing(&paths[0]);
+        list.set_sort(SortOptions {
+            mode: SortMode::Captured,
+            descending: false,
+        });
+        assert_eq!(
+            list.files(),
+            &[
+                paths[2].clone(),
+                paths[1].clone(),
+                paths[0].clone(),
+                paths[3].clone()
+            ]
+        );
+        list.set_sort(SortOptions {
+            mode: SortMode::Captured,
+            descending: true,
+        });
+        assert_eq!(
+            list.files(),
+            &[
+                paths[1].clone(),
+                paths[0].clone(),
+                paths[2].clone(),
+                paths[3].clone()
+            ]
+        );
+        assert_eq!(list.current_file(), Some(&paths[0]));
+        list.set_date_filter(DateFilter::Day("2024-12-01".into()), Some(&paths[0]));
+        assert_eq!(list.files(), &[paths[2].clone()]);
+        assert!(list.current_index().is_none());
+        list.set_date_filter(DateFilter::Undated, Some(&paths[0]));
+        assert_eq!(list.files(), &[paths[3].clone()]);
+        list.set_date_filter(DateFilter::All, Some(&paths[0]));
+        assert_eq!(list.current_file(), Some(&paths[0]));
+        assert_eq!(list.catalog_revision(), revision);
+        assert_eq!(list.all_files().len(), 4);
+        list.set_date_filter(DateFilter::Day("1990-01-01".into()), Some(&paths[0]));
+        assert!(list.next().is_none());
+        assert!(list.prev().is_none());
+        list.set_date_filter(DateFilter::All, Some(&paths[0]));
+        list.remove_file(&paths[1]);
+        assert_eq!(list.all_files().len(), 3);
+        assert_ne!(list.catalog_revision(), revision);
     }
 }

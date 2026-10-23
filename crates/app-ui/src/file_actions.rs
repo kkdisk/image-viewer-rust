@@ -98,7 +98,12 @@ impl ImageViewerApp {
                     }
                     match scan.result {
                         Ok(mut list) => {
-                            let exists = list.try_select_existing(&scan.path);
+                            let exists = list.contains_source(&scan.path);
+                            // 以交付時的條件為準；日期重讀完成前不暫時顯示全部來源。
+                            list.set_date_filter(
+                                self.playlist.date_filter().clone(),
+                                Some(&scan.path),
+                            );
                             list.set_sort(self.preferences.current.sort);
                             self.playlist = list;
                             self.thumbnail_manager.clear();

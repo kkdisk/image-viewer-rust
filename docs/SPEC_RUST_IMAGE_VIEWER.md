@@ -6,6 +6,9 @@
 **0.4.0／0.5.0 補充契約**：[資源與瀏覽](SPEC_BROWSING_RESOURCES.md)
 **0.5.x 補充契約**：[看圖便利操作](SPEC_VIEWING_CONVENIENCE.md)
 **0.5.2 補充契約**：[高品質放大](SPEC_HIGH_QUALITY_ZOOM.md)
+**功能清單**：[已實作、待驗收與後續規劃](FEATURE_CHECKLIST.md)
+**0.8.0 剪貼簿契約**：[影像複製](SPEC_IMAGE_CLIPBOARD.md)
+**0.8.0 瀏覽契約**：[拍攝日期與縮圖總覽](SPEC_PHOTO_BROWSER.md)
 **0.7.0 調色契約**：[曲線與預設集](SPEC_TONING_PRESETS.md)
 
 **0.6.1 介面契約**：[狀態列、側欄與縮圖排版](UI_LAYOUT_REVIEW.md)

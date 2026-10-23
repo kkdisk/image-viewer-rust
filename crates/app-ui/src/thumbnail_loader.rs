@@ -59,6 +59,10 @@ impl Default for ThumbnailManager {
     }
 }
 impl ThumbnailManager {
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
     pub fn new() -> Self {
         Self::with_budget(DEFAULT_THUMBNAIL_BUDGET)
     }

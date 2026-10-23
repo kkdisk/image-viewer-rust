@@ -26,3 +26,8 @@ mod export_dialog;
 pub mod geometry_editor;
 
 pub mod toning_presets;
+
+mod photo_browser;
+mod photo_index;
+
+mod image_clipboard;

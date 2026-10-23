@@ -233,6 +233,9 @@ impl ImageViewerApp {
                 .as_deref()
                 .unwrap_or("未記錄有效 EXIF 日期時間")
         ));
+        if let Some(camera) = photo.camera_label() {
+            ui.label(format!("拍攝相機：{camera}"));
+        }
         ui.label(format!("尺寸：{} × {} px", dimensions.0, dimensions.1));
         ui.label(format!("格式：{}", info.format));
         ui.label(format!(
