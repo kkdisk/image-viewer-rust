@@ -15,6 +15,8 @@ pub use histogram_view::{HistogramMode, HistogramWidget};
 /// 選單觸發之動作
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
+    ImportPreset,
+    ExportPreset,
     Crop,
     Resize,
     Export,
@@ -307,6 +309,15 @@ impl MenuBar {
                     });
 
                     ui.menu_button("工具", |ui| {
+                        if ui.button("匯入調色預設集…").clicked() {
+                            triggered_action = Some(MenuAction::ImportPreset);
+                            ui.close_menu();
+                        }
+                        if ui.button("匯出調色預設集…").clicked() {
+                            triggered_action = Some(MenuAction::ExportPreset);
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         if ui
                             .button("👥 重複圖片檢查器 (Duplicate Finder)...")
                             .clicked()
@@ -447,6 +458,7 @@ impl AboutDialog {
     }
 }
 
+pub mod curve_editor;
 pub mod status_bar;
 pub use status_bar::{DocumentStatus, StatusBar, StatusBarState, ZoomAction};
 
@@ -639,6 +651,12 @@ impl AdjustmentPanel {
                 if fine_tune.header_response.clicked() {
                     *state.fine_tune_open = !*state.fine_tune_open;
                 }
+                ui.add_space(6.0);
+                egui::CollapsingHeader::new("色調曲線")
+                    .id_salt("tone_curves")
+                    .show(ui, |ui| {
+                        changed |= curve_editor::show(ui, &mut state.params.curves);
+                    });
             });
 
         if changed {

@@ -156,7 +156,14 @@ impl EditingSession {
             return false;
         }
         if let Some(preview) = self.preview_image.take() {
-            self.history.push(preview, "套用微調參數");
+            self.history.push(
+                preview,
+                if self.adjustment_params.curves.is_identity() {
+                    "套用微調參數"
+                } else {
+                    "套用調色與曲線"
+                },
+            );
             self.adjustment_params = AdjustmentParams::default();
             true
         } else {

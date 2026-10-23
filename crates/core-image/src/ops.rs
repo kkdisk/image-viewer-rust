@@ -16,6 +16,8 @@ pub struct AdjustmentParams {
     pub contrast: f32,
     /// 飽和度 (0.0 ~ 2.0，預設 1.0 代表不變)
     pub saturation: f32,
+    /// RGB 總曲線與各通道曲線，於既有微調之後套用。
+    pub curves: crate::curves::CurveSet,
 }
 
 impl Default for AdjustmentParams {
@@ -26,6 +28,7 @@ impl Default for AdjustmentParams {
             brightness: 1.0,
             contrast: 1.0,
             saturation: 1.0,
+            curves: Default::default(),
         }
     }
 }
@@ -33,7 +36,8 @@ impl Default for AdjustmentParams {
 impl AdjustmentParams {
     /// 判斷是否所有微調參數皆處於無修改預設值
     pub fn is_identity(&self) -> bool {
-        self.temperature == 0
+        self.curves.is_identity()
+            && self.temperature == 0
             && self.tint == 0
             && (self.brightness - 1.0).abs() < 1e-4
             && (self.contrast - 1.0).abs() < 1e-4
@@ -190,7 +194,9 @@ pub fn apply_adjustments_rgba(img: &RgbaImage, params: &AdjustmentParams) -> Rgb
         params.saturation,
     );
 
-    RgbaImage::from_raw(width, height, fine_tuned).unwrap_or_else(|| img.clone())
+    let mut image = RgbaImage::from_raw(width, height, fine_tuned).unwrap_or_else(|| img.clone());
+    params.curves.apply_in_place(&mut image);
+    image
 }
 
 /// 對 DynamicImage 套用完整的微調參數管線

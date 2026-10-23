@@ -19,6 +19,7 @@ use crate::thumbnail_loader::ThumbnailManager;
 
 /// 主圖片瀏覽與編輯桌面應用狀態
 pub struct ImageViewerApp {
+    pub(crate) presets: crate::toning_presets::PresetState,
     pub(crate) geometry: Option<crate::geometry_editor::GeometryDraft>,
     pub(crate) export: crate::export_dialog::ExportState,
     pub file_actions: crate::file_actions::FileActions,
@@ -108,6 +109,7 @@ pub struct ImageViewerApp {
 impl Default for ImageViewerApp {
     fn default() -> Self {
         Self {
+            presets: Default::default(),
             geometry: None,
             export: Default::default(),
             file_actions: Default::default(),
@@ -854,6 +856,7 @@ impl eframe::App for ImageViewerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_presets();
         self.poll_export();
         if self.geometry.as_ref().is_some_and(|d| {
             self.session
@@ -1063,6 +1066,23 @@ impl eframe::App for ImageViewerApp {
                             .map(|p| p.to_path_buf());
                         self.duplicate_finder_state.open_with_dir(cur_dir);
                     }
+                    crate::panels::MenuAction::ImportPreset => {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("調色預設集", &["json"])
+                            .pick_file()
+                        {
+                            self.import_toning_preset(path);
+                        }
+                    }
+                    crate::panels::MenuAction::ExportPreset => {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("調色預設集", &["json"])
+                            .set_file_name("自訂調色.json")
+                            .save_file()
+                        {
+                            self.export_toning_preset(path);
+                        }
+                    }
                     crate::panels::MenuAction::About => self.show_about_dialog = true,
                 }
             }
@@ -1168,22 +1188,7 @@ impl eframe::App for ImageViewerApp {
             self.show_inspector(ctx, &mut adjustment_action);
 
             match adjustment_action {
-                Some(crate::panels::AdjustmentAction::Change) => {
-                    if let Some(sess) = &mut self.session {
-                        if self.slider_params.is_identity() {
-                            self.debouncer.cancel_pending();
-                            self.pending_adjustment = None;
-                            sess.cancel_adjustments();
-                        } else {
-                            let base = sess.committed_image();
-                            self.pending_adjustment = Some(self.debouncer.submit(
-                                base,
-                                Some(sess.identity()),
-                                crate::debounce_queue::PixelOperation::Adjust(self.slider_params),
-                            ));
-                        }
-                    }
-                }
+                Some(crate::panels::AdjustmentAction::Change) => self.queue_toning_preview(),
                 Some(crate::panels::AdjustmentAction::Reset)
                 | Some(crate::panels::AdjustmentAction::Cancel) => {
                     self.debouncer.cancel_pending();
@@ -1413,6 +1418,7 @@ impl eframe::App for ImageViewerApp {
                 });
             ctx.request_repaint();
         }
+        self.show_preset_dialog(ctx);
         self.show_leave_dialog(ctx);
         self.show_browsing_overlay(ctx);
         if !self.browsing.fullscreen {

@@ -211,6 +211,7 @@ fn test_adjustment_params_pipeline() {
         brightness: 1.1,
         contrast: 1.05,
         saturation: 1.2,
+        ..Default::default()
     };
     assert!(!custom_params.is_identity());
 

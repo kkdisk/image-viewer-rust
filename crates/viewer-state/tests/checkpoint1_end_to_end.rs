@@ -36,6 +36,8 @@ fn test_checkpoint1_end_to_end_workflow() {
         brightness: 1.25,
         contrast: 1.1,
         saturation: 1.3,
+
+        ..Default::default()
     };
     session.update_preview(params);
     assert!(session.has_active_preview());

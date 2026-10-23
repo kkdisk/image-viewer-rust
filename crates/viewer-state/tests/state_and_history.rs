@@ -105,6 +105,8 @@ fn test_editing_session_three_state_model() {
         brightness: 1.2,
         contrast: 1.0,
         saturation: 1.0,
+
+        ..Default::default()
     };
     session.update_preview(params);
 

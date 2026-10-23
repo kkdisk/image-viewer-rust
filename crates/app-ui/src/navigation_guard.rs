@@ -97,6 +97,13 @@ impl ImageViewerApp {
         if self.leave_guard.close_confirmed {
             return true;
         }
+        if self.presets.is_pending() {
+            self.status_notification = Some((
+                "預設集仍在處理或等候覆寫確認，請完成或取消後再關閉".into(),
+                std::time::Instant::now(),
+            ));
+            return false;
+        }
         if self.is_document_busy() {
             if self.leave_guard.action.is_none() {
                 self.leave_guard.action = Some(LeaveAction::Close);

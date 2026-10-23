@@ -24,3 +24,5 @@ pub mod thumbnail_loader;
 
 mod export_dialog;
 pub mod geometry_editor;
+
+pub mod toning_presets;
