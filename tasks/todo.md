@@ -4,9 +4,9 @@
 
 - [x] 程式碼審查修復：日期篩選單一持有與重載保留、標籤選字保護。
 - [x] 全工作區 188 項測試通過、3 項預設忽略；Clippy／格式檢查無警告。
-- [ ] 提交代碼至 main 分支並推送。
-- [ ] 建立附註標籤 v0.8.0 並推送至 GitHub 遠端儲存庫。
-- [ ] 追蹤 main CI 與標籤 CI 執行結果。
+- [x] 提交代碼至 main 分支並推送：commit `dccca3011d362f36fbdb689727e237cabcf9b822`。
+- [x] 建立附註標籤 v0.8.0 並推送至 GitHub 遠端儲存庫：標籤物件 `a6f45549ef26f78e6cd79e5263081783032bc205`，解析指向 dccca30。
+- [ ] 追蹤 GitHub Actions CI 執行結果：[main & tag CI 監控](https://github.com/kkdisk/image-viewer-rust/actions)。
 
 ## 0.8.0 審查修正（2026-10-23）
 
