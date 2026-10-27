@@ -14,6 +14,7 @@ use std::{
 };
 
 pub(crate) struct LoadedImage {
+    pub preserve_date_filter: bool,
     pub opened_path: PathBuf,
     pub path: PathBuf,
     pub pixels: RgbaImage,
@@ -25,6 +26,7 @@ pub(crate) struct LoadedImage {
 }
 
 struct ReadTask {
+    preserve_date_filter: bool,
     sort: crate::playlist::SortOptions,
     id: u64,
     path: PathBuf,
@@ -154,6 +156,7 @@ impl Default for DocumentIo {
                                 }
                                 let info = crate::convenience::FileInfo::read(&task.path);
                                 Some(LoadedImage {
+                                    preserve_date_filter: task.preserve_date_filter,
                                     info,
                                     opened_path: opened_path.canonicalize().unwrap_or(opened_path),
                                     path: task.path,
@@ -258,6 +261,16 @@ impl ImageViewerApp {
         archive: Option<ManagedArchiveSession>,
         reference: bool,
     ) -> Result<(), String> {
+        self.enqueue_image_with_filter(path, archive, reference, false)
+    }
+
+    pub(crate) fn enqueue_image_with_filter(
+        &mut self,
+        path: PathBuf,
+        archive: Option<ManagedArchiveSession>,
+        reference: bool,
+        preserve_date_filter: bool,
+    ) -> Result<(), String> {
         if self.is_document_busy() {
             return Err("儲存進行中，請稍候再開啟圖片".into());
         }
@@ -284,6 +297,7 @@ impl ImageViewerApp {
             .document_io
             .sender
             .send(Task::Read(Box::new(ReadTask {
+                preserve_date_filter,
                 sort: self.preferences.current.sort,
                 id,
                 path,
@@ -439,6 +453,15 @@ impl ImageViewerApp {
                             if let Some(session) = &mut self.session
                                 && matches_current
                             {
+                                // 同目錄儲存仍屬同一瀏覽範圍；新索引完成前也不得顯示其他日期。
+                                if session.source_path().and_then(|source| source.parent())
+                                    == path.parent()
+                                {
+                                    playlist.set_date_filter(
+                                        self.playlist.date_filter().clone(),
+                                        Some(&path),
+                                    );
+                                }
                                 session.set_source_path(path);
                                 session.mark_saved();
                                 self.animated_source = false;

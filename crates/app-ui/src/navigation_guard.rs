@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub(crate) enum LeaveAction {
     Refresh,
     Delete,
-    Image(PathBuf),
+    Image(PathBuf, bool),
     ArchivePath(PathBuf),
     Archive(ManagedArchiveSession),
     Close,
@@ -176,9 +176,10 @@ impl ImageViewerApp {
                 self.start_archive_path(path);
                 Ok(())
             }
-            LeaveAction::Image(path) => self
-                .open_image_path_unchecked(path)
-                .map_err(|e| e.to_string()),
+            LeaveAction::Image(path, preserve_filter) => {
+                self.cancel_archive_loading();
+                self.enqueue_image_with_filter(path, None, false, preserve_filter)
+            }
             LeaveAction::Archive(session) => self.apply_archive_session_unchecked(session),
             LeaveAction::Loaded(loaded) => {
                 self.install_loaded_image(*loaded);

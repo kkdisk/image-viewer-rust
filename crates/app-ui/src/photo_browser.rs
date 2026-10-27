@@ -435,6 +435,132 @@ impl ImageViewerApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn finish_dates(app: &mut ImageViewerApp) {
+        let ctx = egui::Context::default();
+        let start = std::time::Instant::now();
+        loop {
+            app.poll_photo_browser(&ctx);
+            if app.photo_browser.request.is_none() {
+                break;
+            }
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn 真實拍攝日期在重新壓縮後消失仍保留條件與文件() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("拍攝照片.jpg");
+        image::RgbImage::new(2, 3).save(&path).unwrap();
+        let jpeg = std::fs::read(&path).unwrap();
+        // TIFF 的 EXIF IFD 指向 DateTimeOriginal；只使用測試所需的最小容器。
+        let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x69\x87\x04\0\x01\0\0\0\x1a\0\0\0\0\0\0\0\x01\0\x03\x90\x02\0\x14\0\0\0\x2c\0\0\0\0\0\0\0".to_vec();
+        exif.extend_from_slice(b"2025:01:01 10:00:00\0");
+        let mut photo = vec![0xff, 0xd8, 0xff, 0xe1];
+        photo.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        photo.extend(exif);
+        photo.extend_from_slice(&jpeg[2..]);
+        std::fs::write(&path, photo).unwrap();
+        let mut app = ImageViewerApp::default();
+        app.open_file_path(path.clone()).unwrap();
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        app.request_photo_dates();
+        finish_dates(&mut app);
+        assert_eq!(app.playlist.captured_at(&path), Some("2025-01-01 10:00:00"));
+        app.apply_photo_filter(DateFilter::Day("2025-01-01".into()));
+        assert!(app.save_current_image());
+        assert!(app.resolve_animation_save(true));
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        finish_dates(&mut app);
+        assert!(
+            core_image::exif::read_photo_metadata(&path)
+                .captured_at
+                .is_none()
+        );
+        assert_eq!(
+            app.playlist.date_filter(),
+            &DateFilter::Day("2025-01-01".into())
+        );
+        assert!(app.playlist.is_empty());
+        assert_eq!(
+            app.session.as_ref().unwrap().source_path(),
+            Some(path.as_path())
+        );
+    }
+
+    #[test]
+    fn 篩選中儲存並繼續導覽不清除條件() {
+        let (_dir, mut app, _a, b) = filtered_app();
+        finish_dates(&mut app);
+        app.apply_photo_filter(DateFilter::Undated);
+        app.session
+            .as_mut()
+            .unwrap()
+            .push_action(image::RgbaImage::new(2, 3), "編輯");
+        let index = app.playlist.files().iter().position(|p| p == &b).unwrap();
+        app.navigate_to(index);
+        assert!(app.has_pending_leave());
+        app.resolve_pending_leave(crate::navigation_guard::LeaveChoice::Save)
+            .unwrap();
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        assert_eq!(app.playlist.date_filter(), &DateFilter::Undated);
+        finish_dates(&mut app);
+        assert_eq!(
+            app.session.as_ref().unwrap().source_path(),
+            Some(b.as_path())
+        );
+        assert_eq!(app.playlist.date_filter(), &DateFilter::Undated);
+        assert_eq!(app.playlist.current_file(), Some(&b));
+    }
+
+    #[test]
+    fn 原地儲存保留日期條件且失去日期不自動切圖() {
+        let (_dir, mut app, a, b) = filtered_app();
+        assert!(app.save_current_image());
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        assert_eq!(
+            app.playlist.date_filter(),
+            &DateFilter::Day("2025-01-01".into())
+        );
+        assert!(!app.playlist.files().contains(&b));
+        finish_dates(&mut app);
+        // PNG 沒有 EXIF；重讀後清單為空，但已開啟文件仍保留。
+        assert!(app.playlist.is_empty());
+        assert_eq!(
+            app.session.as_ref().unwrap().source_path(),
+            Some(a.as_path())
+        );
+        assert!(!app.has_unsaved_changes());
+    }
+
+    #[test]
+    fn 無日期篩選儲存後重建索引仍可導覽且不同目錄另存清除條件() {
+        let (_dir, mut app, a, b) = filtered_app();
+        finish_dates(&mut app);
+        app.apply_photo_filter(DateFilter::Undated);
+        assert!(app.save_current_image());
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        assert_eq!(app.playlist.date_filter(), &DateFilter::Undated);
+        assert!(app.playlist.is_empty(), "重建前不得把未知來源當成無日期");
+        finish_dates(&mut app);
+        assert_eq!(app.playlist.len(), 2);
+        app.navigate_to(app.playlist.files().iter().position(|p| p == &b).unwrap());
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        assert_eq!(app.playlist.date_filter(), &DateFilter::Undated);
+        assert_eq!(
+            app.session.as_ref().unwrap().source_path(),
+            Some(b.as_path())
+        );
+        let other = tempfile::tempdir().unwrap();
+        let target = other.path().join("另存.png");
+        assert!(app.save_image_to(&target));
+        assert!(app.wait_document_io(std::time::Duration::from_secs(5)));
+        assert_eq!(app.playlist.date_filter(), &DateFilter::All);
+        assert_eq!(app.playlist.current_file(), Some(&target));
+        assert!(a.exists());
+    }
+
     fn filtered_app() -> (
         tempfile::TempDir,
         ImageViewerApp,

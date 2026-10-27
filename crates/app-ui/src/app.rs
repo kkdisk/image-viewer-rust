@@ -335,7 +335,11 @@ impl ImageViewerApp {
             )));
         }
         self.stop_slideshow();
-        if self.defer_leave(crate::navigation_guard::LeaveAction::Image(path.clone())) {
+        let preserve_filter = self.playlist.files().contains(&path);
+        if self.defer_leave(crate::navigation_guard::LeaveAction::Image(
+            path.clone(),
+            preserve_filter,
+        )) {
             return Ok(());
         }
         self.open_image_path_unchecked(path)
@@ -379,7 +383,10 @@ impl ImageViewerApp {
         if loaded.playlist.catalog_revision() == self.playlist.catalog_revision() {
             // 交換所有權可避免在介面執行緒再次完整複製來源清單。
             std::mem::swap(&mut loaded.playlist, &mut self.playlist);
-            if self.session.as_ref().and_then(|s| s.source_path()) == Some(loaded.path.as_path()) {
+            if loaded.preserve_date_filter
+                || self.session.as_ref().and_then(|s| s.source_path())
+                    == Some(loaded.path.as_path())
+            {
                 loaded.playlist.try_select_existing(&loaded.path);
             } else {
                 loaded.playlist.select_opened_file(&loaded.path);
