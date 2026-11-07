@@ -81,6 +81,8 @@ pub struct DuplicateGroupUi {
 /// 重複圖片檢查器狀態管理器
 pub struct DuplicateFinderState {
     pub is_open: bool,
+    /// 暫時收起清單，使用主畫布檢查完整圖片。
+    pub viewing_large: bool,
     pub target_dir: Option<PathBuf>,
     pub recursive: bool,
     pub mode: DuplicateMode,
@@ -105,6 +107,7 @@ impl Default for DuplicateFinderState {
     fn default() -> Self {
         Self {
             is_open: false,
+            viewing_large: false,
             target_dir: None,
             recursive: true,
             mode: DuplicateMode::SimilarPhash,
@@ -126,6 +129,7 @@ impl Default for DuplicateFinderState {
 impl DuplicateFinderState {
     pub fn close(&mut self) {
         self.is_open = false;
+        self.viewing_large = false;
         self.reset_previews();
     }
     /// 開啟檢查器並預設當前圖片所在目錄
@@ -134,6 +138,7 @@ impl DuplicateFinderState {
             self.target_dir = dir;
         }
         self.is_open = true;
+        self.viewing_large = false;
     }
 
     /// 開始背景平行掃描
@@ -573,6 +578,10 @@ impl DuplicateFinderDialog {
         state.update_progress();
         if matches!(state.status, ScanStatus::Scanning { .. }) {
             ctx.request_repaint();
+        }
+
+        if state.viewing_large {
+            return Self::show_large_view_controls(ctx, state);
         }
 
         let mut navigate_to_path = None;
@@ -1198,6 +1207,57 @@ impl DuplicateFinderDialog {
                 });
         }
 
+        if navigate_to_path.is_some() {
+            state.viewing_large = true;
+        }
+        navigate_to_path
+    }
+
+    /// 大圖仍沿用主檢視器的背景解碼與離開保護；工具列只提供切圖意圖。
+    fn show_large_view_controls(
+        ctx: &egui::Context,
+        state: &mut DuplicateFinderState,
+    ) -> Option<PathBuf> {
+        let mut navigate_to_path = None;
+        let mut is_open = true;
+        Window::new("查重大圖檢視")
+            .id(egui::Id::new("duplicate_large_view_controls"))
+            .open(&mut is_open)
+            .default_pos(pos2(16.0, 80.0))
+            .resizable(false)
+            .collapsible(true)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if let Some(group) = state
+                        .active_group_idx
+                        .and_then(|index| state.groups.get(index))
+                    {
+                        let compare_index = state
+                            .active_item_idx
+                            .filter(|index| *index < group.items.len())
+                            .unwrap_or(usize::from(group.items.len() > 1));
+                        for (label, index) in
+                            [("開啟基準圖", Some(0)), ("開啟比對圖", Some(compare_index))]
+                        {
+                            if let Some(item) = index.and_then(|index| group.items.get(index))
+                                && ui
+                                    .button(label)
+                                    .on_hover_text(item.path.display().to_string())
+                                    .clicked()
+                            {
+                                navigate_to_path = Some(item.path.clone());
+                            }
+                        }
+                    }
+                    if ui.button("返回查重清單").clicked() {
+                        state.viewing_large = false;
+                    }
+                });
+                ui.label("滾輪縮放、拖曳平移；Esc 返回清單");
+            });
+        if !is_open {
+            state.close();
+        }
         navigate_to_path
     }
 }
@@ -1275,7 +1335,7 @@ fn render_preview_card(
     ui.add_space(6.0);
 
     // 跳轉到主檢視器
-    if ui.button("🖥 在主檢視器開啟 (Open)").clicked() {
+    if ui.button("🖥 大圖檢視（暫時收起清單）").clicked() {
         *navigate_to_path = Some(item.path.clone());
     }
 }

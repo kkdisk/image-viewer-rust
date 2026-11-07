@@ -14,6 +14,7 @@
 **0.6.1 介面契約**：[狀態列、側欄與縮圖排版](UI_LAYOUT_REVIEW.md)
 
 **0.6.0 補充契約**：[裁切、尺寸與輸出](SPEC_EDITING_OUTPUT.md)
+**查重大圖檢視補充契約**：[清單收起與返回](SPEC_DUPLICATE_LARGE_VIEW.md)
 **關聯意圖**：[docs/intent/rust_image_viewer_migration.md](docs/intent/rust_image_viewer_migration.md)
 
 ---

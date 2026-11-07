@@ -785,7 +785,11 @@ impl ImageViewerApp {
             } else if self.show_about_dialog {
                 self.show_about_dialog = false;
             } else if self.duplicate_finder_state.is_open {
-                self.duplicate_finder_state.close();
+                if self.duplicate_finder_state.viewing_large {
+                    self.duplicate_finder_state.viewing_large = false;
+                } else {
+                    self.duplicate_finder_state.close();
+                }
             } else if self.show_password_dialog {
                 self.cancel_archive_loading();
             } else if self.convenience.info_open && !self.browsing.fullscreen {
@@ -813,7 +817,7 @@ impl ImageViewerApp {
         }
         if self.show_about_dialog
             || self.show_password_dialog
-            || self.duplicate_finder_state.is_open
+            || (self.duplicate_finder_state.is_open && !self.duplicate_finder_state.viewing_large)
             || ctx.wants_keyboard_input()
         {
             return;
@@ -1502,6 +1506,55 @@ mod presentation_tests {
         app.open_file_path(dir.path().to_path_buf()).unwrap();
         assert!(app.has_pending_leave());
         assert!(!app.is_loading_image());
+    }
+
+    #[test]
+    fn duplicate_large_view_allows_zoom_and_escape_restores_list() {
+        let mut app = ImageViewerApp {
+            session: Some(EditingSession::new(image::RgbaImage::new(4, 4), None)),
+            ..Default::default()
+        };
+        app.duplicate_finder_state.open_with_dir(None);
+        let ctx = egui::Context::default();
+        let press = |app: &mut ImageViewerApp, key| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+                |ctx| app.handle_shortcuts(ctx),
+            );
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+                |_| {},
+            );
+        };
+        app.viewport.zoom = 0.5;
+        press(&mut app, Key::Num1);
+        assert_eq!(app.viewport.zoom, 0.5);
+        app.duplicate_finder_state.viewing_large = true;
+        press(&mut app, Key::Num1);
+        assert_eq!(app.viewport.zoom, 1.0);
+        press(&mut app, Key::Escape);
+        assert!(app.duplicate_finder_state.is_open);
+        assert!(!app.duplicate_finder_state.viewing_large);
+        press(&mut app, Key::Escape);
+        assert!(!app.duplicate_finder_state.is_open);
     }
 
     #[test]

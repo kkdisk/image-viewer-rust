@@ -2,6 +2,138 @@ use app_ui::panels::{DuplicateFinderState, DuplicateGroupUi, DuplicateItemUi};
 use image::{ImageBuffer, Rgba};
 use std::fs;
 
+fn label_position(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+    match shape {
+        egui::Shape::Text(text) if text.galley.text() == label => {
+            Some(text.pos + text.galley.size() * 0.5)
+        }
+        egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| label_position(shape, label)),
+        _ => None,
+    }
+}
+
+fn duplicate_frame(
+    ctx: &egui::Context,
+    state: &mut DuplicateFinderState,
+    events: Vec<egui::Event>,
+) -> (egui::FullOutput, Option<std::path::PathBuf>) {
+    let mut path = None;
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            path = app_ui::panels::duplicate_dialog::DuplicateFinderDialog::show(ctx, state);
+        },
+    );
+    (output, path)
+}
+
+fn click_duplicate_button(
+    ctx: &egui::Context,
+    state: &mut DuplicateFinderState,
+    label: &str,
+) -> Option<std::path::PathBuf> {
+    // 等待新視窗完成配置，再以真實指標事件點擊按鈕。
+    for _ in 0..3 {
+        duplicate_frame(ctx, state, vec![]);
+    }
+    let (output, _) = duplicate_frame(ctx, state, vec![]);
+    let pos = output
+        .shapes
+        .iter()
+        .find_map(|shape| label_position(&shape.shape, label))
+        .unwrap_or_else(|| panic!("找不到按鈕：{label}"));
+    duplicate_frame(
+        ctx,
+        state,
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    duplicate_frame(
+        ctx,
+        state,
+        vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    )
+    .1
+}
+
+#[test]
+fn large_view_hides_list_switches_pair_and_preserves_selection_on_return() {
+    let ctx = egui::Context::default();
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = DuplicateFinderState::default();
+    state.open_with_dir(Some(dir.path().to_path_buf()));
+    let paths = [dir.path().join("base.png"), dir.path().join("compare.png")];
+    state.groups = vec![DuplicateGroupUi {
+        id: 22,
+        max_distance: 10,
+        is_expanded: true,
+        items: paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| DuplicateItemUi {
+                path: path.clone(),
+                size_bytes: 100,
+                dimensions: Some((100, 100)),
+                selected_for_delete: index == 1,
+            })
+            .collect(),
+    }];
+    state.active_group_idx = Some(0);
+    state.active_item_idx = Some(1);
+    assert_eq!(
+        click_duplicate_button(&ctx, &mut state, "🖥 大圖檢視（暫時收起清單）"),
+        Some(paths[0].clone())
+    );
+    assert!(state.viewing_large);
+    let (output, _) = duplicate_frame(&ctx, &mut state, vec![]);
+    assert!(output.shapes.iter().all(|shape| {
+        label_position(&shape.shape, "🖥 大圖檢視（暫時收起清單）").is_none()
+    }));
+    assert_eq!(
+        click_duplicate_button(&ctx, &mut state, "開啟比對圖"),
+        Some(paths[1].clone())
+    );
+    assert_eq!(
+        click_duplicate_button(&ctx, &mut state, "開啟基準圖"),
+        Some(paths[0].clone())
+    );
+    assert_eq!(
+        click_duplicate_button(&ctx, &mut state, "返回查重清單"),
+        None
+    );
+    assert!(!state.viewing_large);
+    assert!(state.is_open);
+    assert_eq!(state.active_group_idx, Some(0));
+    assert_eq!(state.active_item_idx, Some(1));
+    assert_eq!(state.groups[0].id, 22);
+    assert!(state.groups[0].items[1].selected_for_delete);
+    assert_eq!(state.target_dir.as_deref(), Some(dir.path()));
+    state.viewing_large = true;
+    state.close();
+    assert!(!state.viewing_large);
+    state.open_with_dir(None);
+    assert!(!state.viewing_large);
+}
+
 #[test]
 fn scan_delivers_metadata_failures_and_isolates_replaced_scan() {
     use app_ui::panels::{DuplicateMode, duplicate_dialog::ScanStatus};
@@ -97,8 +229,8 @@ fn smart_selection_keeps_unknown_sizes_and_a_valid_representative() {
 
 #[test]
 fn test_duplicate_finder_state_selection_and_deletion() {
-    let temp_dir = std::env::temp_dir().join("image_viewer_test_duplicates");
-    fs::create_dir_all(&temp_dir).unwrap();
+    let isolated_dir = tempfile::tempdir().unwrap();
+    let temp_dir = isolated_dir.path().to_path_buf();
 
     let path_a1 = temp_dir.join("dup_a1.png");
     let path_a2 = temp_dir.join("dup_a2.png");
