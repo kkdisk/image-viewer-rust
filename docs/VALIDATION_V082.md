@@ -31,3 +31,11 @@
 - 原生桌面縮放／平移、工具列移動／摺疊與未儲存確認仍待人工驗收。
 - 起始 HEAD 與遠端 main 為 c3d60c58f45b2d97d84989f75834c3a5c5385631；交付前遠端尚無 v0.8.2。
 - 工作流程在 main／v* 推送時執行品質檢查；標籤品質工作通過後建立 GitHub Release 草稿，公開發布並非本輪操作。
+
+
+## Git 交付完成
+
+- 修補提交 `0648a859df38393fed73102da1ae5d6cd47c0698` 已推送 main；[該提交 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/42404604077) 完整通過後才建立標籤。
+- 附註標籤 `v0.8.2` 已推送；標籤物件 `6ec4dc0ba8d1e1f358b65d3cef0233e554e284ed`，遠端解析正確指向上述修補提交。
+- [標籤 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/42405356805) 查詢時執行中，尚不宣稱 Release 草稿已建立或公開發布。
+- 本節為後續文件提交，保留 v0.8.2 指向已通過 CI 的修補提交。
