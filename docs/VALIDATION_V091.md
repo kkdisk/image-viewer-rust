@@ -21,3 +21,10 @@
 ## 原生桌面
 
 - 使用者於 2026-11-12 回報清除最近清單驗證通過。
+
+## Git 交付完成
+
+- 交付提交 `ddabdcd62efdbba9a7cbcdedc2f8f753de59c1f6` 已推送 main；[該提交 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/43068341421) 完整通過後才建立標籤。
+- 附註標籤 `v0.9.1` 已推送；標籤物件 `d761732f4e8b776771b99e2481506bb96e3a450e`，遠端解析正確指向上述提交。
+- [標籤 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/43069677953) 查詢時執行中，尚不宣稱 Release 草稿已建立或公開發布。
+- 本節為後續文件提交，保留 v0.9.1 指向已通過 CI 的交付提交。
