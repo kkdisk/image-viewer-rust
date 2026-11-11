@@ -45,3 +45,10 @@
 ## CI 限制
 
 - GitHub Actions 的 Windows 執行器不保證安裝 HEIF／HEVC 延伸模組：以 WIC 編碼器產生樣本的測試在無編碼元件時會略過並輸出提示，真實樣本測試為 `#[ignore]`。CI 通過不代表 HEVC 解碼已在該環境驗證。
+
+## Git 交付完成
+
+- 交付提交 `7f28c42c23b25fbe7a9ff244d8fc91e784c66d09` 已推送 main（前一筆 `d8ba74f` 為同版 T1～T3）；[該提交 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/43064190772) 完整通過後才建立標籤。
+- 附註標籤 `v0.9.0` 已推送；標籤物件 `266ae8a30cd803d71e6fbca90e746cbb62726e98`，遠端解析正確指向上述提交。
+- [標籤 CI](https://github.com/kkdisk/image-viewer-rust/actions/runs/43065860610) 查詢時執行中，尚不宣稱 Release 草稿已建立或公開發布。
+- 本節為後續文件提交，保留 v0.9.0 指向已通過 CI 的交付提交。
