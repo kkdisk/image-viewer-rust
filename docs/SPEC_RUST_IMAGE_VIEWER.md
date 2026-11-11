@@ -25,7 +25,7 @@
 
 | 模組 ID (`module_id`) | 模組責任 | 相依模組 |
 | :--- | :--- | :--- |
-| `core-image` | 影像編解碼、EXIF 解析、白平衡/微調平行管線、幾何轉換 (旋轉/翻轉)、原子存檔 | 無 (底層基礎) |
+| `core-image` | 影像編解碼（含 HEIF 家族經 Windows Imaging Component 讀取，見 [HEIC 規格](SPEC_HEIC_SUPPORT.md)）、EXIF 解析、白平衡/微調平行管線、幾何轉換 (旋轉/翻轉)、原子存檔 | 無 (底層基礎；Windows 平台使用作業系統元件 WIC，經 `windows` crate 繫結，不附帶 C/C++ 函式庫) |
 | `core-archive` | 壓縮檔（7z/zip）安全預覽與解壓、Zip-bomb 防範、安全檔案刪除（資源回收桶） | 無 |
 | `duplicate-finder` | MD5 檔案雜湊、pHash 感知雜湊、Union-Find 分群、相似度比對 | `core-image` |
 | `viewer-state` | 文件狀態機、非破壞式編輯 Session、In-Memory Undo/Redo 歷史、雙圖視口同步邏輯 | `core-image` |

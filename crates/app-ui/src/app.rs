@@ -23,6 +23,9 @@ pub struct ImageViewerApp {
     pub(crate) photo_browser: crate::photo_browser::PhotoBrowser,
     /// 缺少系統解碼元件時顯示安裝指引的編碼
     pub(crate) codec_help: Option<core_image::heif::Codec>,
+    /// 測試用另存對話框替身（原生對話框無法於自動化測試中操作）
+    #[cfg(test)]
+    pub(crate) test_save_dialog: TestSaveDialog,
     pub(crate) presets: crate::toning_presets::PresetState,
     pub(crate) geometry: Option<crate::geometry_editor::GeometryDraft>,
     pub(crate) export: crate::export_dialog::ExportState,
@@ -118,6 +121,8 @@ impl Default for ImageViewerApp {
             image_clipboard: Default::default(),
             photo_browser: Default::default(),
             codec_help: None,
+            #[cfg(test)]
+            test_save_dialog: TestSaveDialog::default(),
             presets: Default::default(),
             geometry: None,
             export: Default::default(),
@@ -698,6 +703,13 @@ impl ImageViewerApp {
         if self.is_document_busy() || self.is_loading_image() {
             return false;
         }
+        if core_image::formats::is_read_only_extension(target_path) {
+            self.status_notification = Some((
+                "HEIC／HEIF／AVIF 只能讀取，請另存為 JPEG、PNG 等格式".into(),
+                std::time::Instant::now(),
+            ));
+            return false;
+        }
         if (self.animated_source
             || target_path.extension().is_some_and(|ext| {
                 ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg")
@@ -729,6 +741,15 @@ impl ImageViewerApp {
             .and_then(|s| s.source_path())
             .map(|p| p.to_path_buf())
         {
+            if core_image::formats::is_read_only_extension(&path) {
+                // 唯讀來源不得覆寫原檔：改為另存，預設同名 JPEG。
+                self.status_notification = Some((
+                    "此格式無法覆寫原檔，請另存（預設為 JPEG）；原檔不會被修改".into(),
+                    std::time::Instant::now(),
+                ));
+                let name = core_image::formats::read_only_save_name(&path);
+                return self.save_image_as_dialog_named(Some(name));
+            }
             self.save_image_to(&path)
         } else {
             self.save_image_as_dialog()
@@ -737,32 +758,56 @@ impl ImageViewerApp {
 
     /// 彈出原生對話框另存新檔
     pub fn save_image_as_dialog(&mut self) -> bool {
+        self.save_image_as_dialog_named(None)
+    }
+
+    /// 另存新檔；可指定預設檔名。取消對話框回傳 `false`，不改變任何狀態。
+    fn save_image_as_dialog_named(&mut self, default_name: Option<String>) -> bool {
         if !self.can_save_committed_image() {
             return false;
         }
-        if let Some(session) = &self.session {
-            // 只列可寫格式；只能解碼的格式（如 HEIC）不得出現在另存選項。
-            let dialog = core_image::formats::WRITABLE_FILTERS
-                .iter()
-                .fold(rfd::FileDialog::new(), |dialog, (name, extensions)| {
-                    dialog.add_filter(*name, extensions)
-                });
-
-            let dialog = if let Some(src) = session.source_path() {
-                if let Some(parent) = src.parent() {
-                    dialog.set_directory(parent)
-                } else {
-                    dialog
-                }
-            } else {
-                dialog
-            };
-
-            if let Some(target_path) = dialog.save_file() {
-                return self.save_image_to(&target_path);
-            }
+        let directory = self
+            .session
+            .as_ref()
+            .and_then(|session| session.source_path())
+            .and_then(|source| source.parent())
+            .map(std::path::Path::to_path_buf);
+        match self.pick_save_target(directory, default_name) {
+            Some(target_path) => self.save_image_to(&target_path),
+            None => false,
         }
-        false
+    }
+
+    #[cfg(not(test))]
+    fn pick_save_target(
+        &mut self,
+        directory: Option<PathBuf>,
+        default_name: Option<String>,
+    ) -> Option<PathBuf> {
+        // 只列可寫格式；只能解碼的格式（如 HEIC）不得出現在另存選項。
+        let mut dialog = core_image::formats::WRITABLE_FILTERS
+            .iter()
+            .fold(rfd::FileDialog::new(), |dialog, (name, extensions)| {
+                dialog.add_filter(*name, extensions)
+            });
+        if let Some(directory) = directory {
+            dialog = dialog.set_directory(directory);
+        }
+        if let Some(name) = default_name {
+            dialog = dialog.set_file_name(name);
+        }
+        dialog.save_file()
+    }
+
+    /// 測試以注入的回應取代原生對話框：記錄預設檔名，回傳預先指定的目標（`None` 代表取消）。
+    #[cfg(test)]
+    fn pick_save_target(
+        &mut self,
+        directory: Option<PathBuf>,
+        default_name: Option<String>,
+    ) -> Option<PathBuf> {
+        self.test_save_dialog.requested = Some((directory, default_name));
+        self.test_save_dialog.response.take()
     }
 
     fn can_save_committed_image(&mut self) -> bool {
@@ -1912,4 +1957,13 @@ mod selected_label_copy_tests {
         );
         assert!(!app.image_clipboard.is_pending());
     }
+}
+
+/// 測試用另存對話框替身：`response` 為使用者選擇的目標（`None` 代表取消），
+/// `requested` 記錄最近一次開啟時的預設資料夾與檔名。
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct TestSaveDialog {
+    pub response: Option<PathBuf>,
+    pub requested: Option<(Option<PathBuf>, Option<String>)>,
 }

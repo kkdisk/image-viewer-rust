@@ -17,6 +17,8 @@ pub mod navigation_guard;
 pub mod panels;
 pub mod playlist;
 pub mod preferences;
+#[cfg(test)]
+mod read_only_save_tests;
 pub mod recent;
 pub mod slideshow;
 pub mod startup;

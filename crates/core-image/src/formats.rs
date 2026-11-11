@@ -10,6 +10,9 @@ pub const READABLE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "bmp", "webp", "tiff", "tif", "gif", "heic", "heif", "avif",
 ];
 
+/// 只能解碼、無法寫出的格式：來源為此類時不得原地儲存，目標為此類時拒絕。
+pub const READ_ONLY_EXTENSIONS: &[&str] = &["heic", "heif", "avif"];
+
 /// 另存對話框的格式篩選（顯示名稱、副檔名），順序即對話框順序。
 pub const WRITABLE_FILTERS: &[(&str, &[&str])] = &[
     ("PNG 影像 (*.png)", &["png"]),
@@ -37,6 +40,20 @@ pub fn is_writable_extension(path: &Path) -> bool {
             .iter()
             .any(|(_, extensions)| extensions.contains(&ext.as_str()))
     })
+}
+
+/// 是否為只能讀取的格式（依副檔名）。
+pub fn is_read_only_extension(path: &Path) -> bool {
+    lower_extension(path).is_some_and(|ext| READ_ONLY_EXTENSIONS.contains(&ext.as_str()))
+}
+
+/// 唯讀來源的預設另存檔名：同名 `.jpg`。
+pub fn read_only_save_name(path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "未命名".into());
+    format!("{stem}.jpg")
 }
 
 /// 產生「(*.png, *.jpg, …)」形式的篩選說明。
@@ -79,6 +96,16 @@ mod tests {
             assert!(!is_writable_extension(Path::new(&format!("相片.{ext}"))));
         }
         assert!(is_readable_extension(Path::new("IMG_0001.HEIC")));
+        for ext in READ_ONLY_EXTENSIONS {
+            assert!(READABLE_EXTENSIONS.contains(ext));
+        }
+        assert!(is_read_only_extension(Path::new("IMG_0001.HEIC")));
+        // GIF 可原地儲存（動畫轉靜態），不屬於唯讀格式。
+        assert!(!is_read_only_extension(Path::new("動畫.gif")));
+        assert_eq!(
+            read_only_save_name(Path::new("D:/相簿/IMG_0001.HEIC")),
+            "IMG_0001.jpg"
+        );
     }
 
     #[test]

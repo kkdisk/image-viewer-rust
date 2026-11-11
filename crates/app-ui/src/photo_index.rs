@@ -1,7 +1,7 @@
 //! 有界拍攝日期索引：不解碼像素，只交付完整且仍有效的一輪結果。
 use std::{
     collections::HashMap,
-    io::{Cursor, Read},
+    io::{Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -22,7 +22,58 @@ fn stamp(path: &Path) -> Option<Stamp> {
     Some(Stamp(meta.len(), meta.modified().ok()))
 }
 fn read_date(path: &Path) -> Option<String> {
-    read_date_from(std::fs::File::open(path).ok()?)
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut header = Vec::with_capacity(64);
+    (&mut file).take(64).read_to_end(&mut header).ok()?;
+    file.seek(SeekFrom::Start(0)).ok()?;
+    if core_image::heif::is_heif_bytes(&header) {
+        read_heif_date(file)
+    } else {
+        read_date_from(file)
+    }
+}
+
+/// 累計讀取量有上限的 reader：超過預算即回傳錯誤；Seek 不計入讀取量。
+///
+/// 預算同時限制配置量：`kamadak-exif` 依實際讀到的資料增長緩衝，不依宣告長度預先配置
+/// （見 docs/SPIKE_HEIC_WIC.md）。
+struct BudgetReader<R> {
+    inner: R,
+    read: u64,
+    budget: u64,
+}
+impl<R: Read> Read for BudgetReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let remaining = self.budget.saturating_sub(self.read);
+        if remaining == 0 {
+            return Err(std::io::Error::other("超過日期讀取預算"));
+        }
+        let limit = buf
+            .len()
+            .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let n = self.inner.read(&mut buf[..limit])?;
+        self.read += n as u64;
+        Ok(n)
+    }
+}
+impl<R: Seek> Seek for BudgetReader<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+/// HEIF 家族：以有界 Seek reader 交給 EXIF 解析，可跳到檔案後段讀取 Exif 區段；
+/// 512 KiB 為累計讀取與配置上限，不是檔案位置上限。越界或失敗一律視為無可用日期。
+fn read_heif_date<R: Read + Seek>(reader: R) -> Option<String> {
+    let budget = BudgetReader {
+        inner: reader,
+        read: 0,
+        budget: HEADER_LIMIT,
+    };
+    let mut buffered = std::io::BufReader::with_capacity(16 * 1024, budget);
+    normalize_date(core_image::exif::read_photo_metadata_from_reader(
+        &mut buffered,
+    ))
 }
 /// JPEG 前段是否已足以判定 EXIF；只有確定不需再讀時才回傳 true。
 ///
@@ -85,7 +136,11 @@ fn read_date_from(mut reader: impl Read) -> Option<String> {
     parse_date(&bytes)
 }
 fn parse_date(bytes: &[u8]) -> Option<String> {
-    let metadata = core_image::exif::read_photo_metadata_from_reader(&mut Cursor::new(bytes));
+    normalize_date(core_image::exif::read_photo_metadata_from_reader(
+        &mut Cursor::new(bytes),
+    ))
+}
+fn normalize_date(metadata: core_image::exif::PhotoMetadata) -> Option<String> {
     let mut date = (metadata.datetime_source == Some("拍攝時間"))
         .then_some(metadata.captured_at)
         .flatten()?;
@@ -310,6 +365,100 @@ mod tests {
         let mut cursor = Cursor::new(bytes);
         let date = read_date_from(&mut cursor);
         (date, cursor.position())
+    }
+
+    fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out
+    }
+    fn full(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        boxed(kind, &[&[0u8, 0, 0, 0][..], body].concat())
+    }
+    /// 合成 HEIF：`meta` 在前，Exif 項目位於 `filler` 位元組的 `mdat` 之後；
+    /// `declared_len` 可宣告與實際不同的 Exif 長度（模擬損毀或惡意檔案）。
+    fn heif_with_exif_at_end(filler: usize, declared_len: Option<u32>) -> Vec<u8> {
+        let mut exif = 0u32.to_be_bytes().to_vec();
+        exif.extend(tiff(true, "2024:02:29 12:30:00", 44));
+        let ftyp = boxed(b"ftyp", b"heic\0\0\0\0mif1heic");
+        let mut infe = 1u16.to_be_bytes().to_vec();
+        infe.extend_from_slice(&0u16.to_be_bytes());
+        infe.extend_from_slice(b"Exif\0");
+        let infe = boxed(b"infe", &[&[2u8, 0, 0, 0][..], &infe].concat());
+        let iinf = full(b"iinf", &[&1u16.to_be_bytes()[..], &infe].concat());
+        // iloc v0：offset_size=4、length_size=4、無 base_offset，1 個項目 1 個 extent。
+        let build = |offset: u32| {
+            let mut iloc = vec![0x44, 0x00];
+            iloc.extend_from_slice(&1u16.to_be_bytes());
+            iloc.extend_from_slice(&1u16.to_be_bytes());
+            iloc.extend_from_slice(&0u16.to_be_bytes());
+            iloc.extend_from_slice(&1u16.to_be_bytes());
+            iloc.extend_from_slice(&offset.to_be_bytes());
+            iloc.extend_from_slice(&declared_len.unwrap_or(exif.len() as u32).to_be_bytes());
+            full(b"meta", &[iinf.clone(), full(b"iloc", &iloc)].concat())
+        };
+        let meta_len = build(0).len();
+        let exif_offset = (ftyp.len() + meta_len + 8 + filler) as u32;
+        let mut mdat = vec![0x55; filler];
+        mdat.extend(&exif);
+        [ftyp, build(exif_offset), boxed(b"mdat", &mdat)].concat()
+    }
+    fn heif_counted(bytes: Vec<u8>) -> (Option<String>, u64) {
+        let mut budget = BudgetReader {
+            inner: Cursor::new(bytes),
+            read: 0,
+            budget: u64::MAX,
+        };
+        let date = read_heif_date(&mut budget);
+        (date, budget.read)
+    }
+
+    #[test]
+    #[ignore = "需要 temp/ 內的真實 HEIC 樣本"]
+    fn 真實_heic_日期索引經有界讀取取得含小數秒的拍攝時間() {
+        let sample =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/20250602_112538943_iOS.heic");
+        let file = std::fs::File::open(&sample).unwrap();
+        let mut budget = BudgetReader {
+            inner: file,
+            read: 0,
+            budget: HEADER_LIMIT,
+        };
+        assert_eq!(
+            read_heif_date(&mut budget).as_deref(),
+            Some("2025-06-02 19:25:38.943")
+        );
+        assert!(budget.read <= 64 * 1024, "實讀 {} bytes", budget.read);
+    }
+
+    #[test]
+    fn heif_日期以有界_seek_讀取檔尾_exif_且越界降級() {
+        let date = Some("2024-02-29 12:30:00".to_owned());
+        // Exif 位於 4 MiB 影像資料之後：可 Seek 取得，實際讀取遠小於 512 KiB。
+        let file = heif_with_exif_at_end(4 << 20, None);
+        assert!(core_image::heif::is_heif_bytes(&file));
+        let (found, read) = heif_counted(file.clone());
+        assert_eq!(found, date);
+        assert!(read < 64 * 1024, "實讀 {read} bytes");
+        // 經檔案路徑的完整流程也能讀到。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("尾端.heic");
+        std::fs::write(&path, &file).unwrap();
+        assert_eq!(read_date(&path), date);
+        // 宣告超大 Exif 長度：達到預算即停止，不得配置或讀取超過上限。
+        let huge = heif_with_exif_at_end(1 << 20, Some(u32::MAX));
+        let mut reader = BudgetReader {
+            inner: Cursor::new(huge),
+            read: 0,
+            budget: HEADER_LIMIT,
+        };
+        assert_eq!(read_heif_date(&mut reader), None);
+        assert!(reader.read <= HEADER_LIMIT);
+        // 截斷檔：不 panic，視為無可用日期。
+        for cut in [10, 60, 200, file.len() - 10] {
+            assert_eq!(heif_counted(file[..cut].to_vec()).0, None);
+        }
     }
     #[test]
     fn 漸進讀取在可確定結果時只讀首段且不漏掉後方_exif() {

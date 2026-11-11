@@ -180,6 +180,13 @@ pub fn save_image_atomic<P: AsRef<Path>>(
     target_path: P,
 ) -> Result<(), ImageError> {
     let target = target_path.as_ref();
+    // HEIC／HEIF／AVIF 只能解碼；image crate 可能辨識副檔名卻無編碼器，需在寫入前明確拒絕。
+    if crate::formats::is_read_only_extension(target) {
+        return Err(ImageError::UnsupportedFormat(format!(
+            "無法寫出 {}（此格式只能讀取，請另存為其他格式）",
+            target.display()
+        )));
+    }
     let format = ImageFormat::from_path(target)
         .map_err(|_| ImageError::UnsupportedFormat(target.display().to_string()))?;
     if format == ImageFormat::Jpeg {

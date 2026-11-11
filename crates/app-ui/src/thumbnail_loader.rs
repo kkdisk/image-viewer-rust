@@ -50,6 +50,25 @@ fn make_thumbnail(image: image::DynamicImage, edge: u32) -> image::RgbaImage {
         image.thumbnail(edge, edge).to_rgba8()
     }
 }
+/// 縮圖的像素來源，供測試確認是否走快速路徑。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThumbnailSource {
+    /// HEIF 檔內嵌縮圖（約 30 ms，見 docs/SPIKE_HEIC_WIC.md）
+    Embedded,
+    /// 完整解碼後縮小
+    Decoded,
+}
+/// 產生縮圖：HEIF 內嵌縮圖長邊足夠時直接使用（已套用方向與色彩轉換），否則完整解碼。
+fn decode_thumbnail(path: &Path, edge: u32) -> Result<(image::RgbaImage, ThumbnailSource), String> {
+    if core_image::heif::is_heif_path(path)
+        && let Some(embedded) = core_image::heif::embedded_thumbnail(path, edge)
+    {
+        let image = make_thumbnail(image::DynamicImage::ImageRgba8(embedded), edge);
+        return Ok((image, ThumbnailSource::Embedded));
+    }
+    let image = core_image::load_image(path).map_err(|error| error.to_string())?;
+    Ok((make_thumbnail(image, edge), ThumbnailSource::Decoded))
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Stamp {
     length: u64,
@@ -177,11 +196,7 @@ impl ThumbnailManager {
                         if request.known == Some(before) {
                             return Ok(None);
                         }
-                        let image = make_thumbnail(
-                            core_image::load_image(&request.path)
-                                .map_err(|error| error.to_string())?,
-                            request.edge,
-                        );
+                        let (image, _) = decode_thumbnail(&request.path, request.edge)?;
                         if stamp(&request.path)? != before {
                             return Err("解碼期間檔案已更新".into());
                         }
@@ -336,6 +351,38 @@ impl crate::app::ImageViewerApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 非_heif_縮圖維持完整解碼() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("一般.png");
+        image::RgbaImage::new(300, 200).save(&path).unwrap();
+        let (image, source) = decode_thumbnail(&path, THUMBNAIL_SIZE).unwrap();
+        assert_eq!(source, ThumbnailSource::Decoded);
+        assert_eq!(image.width(), THUMBNAIL_SIZE);
+    }
+
+    #[test]
+    #[ignore = "需要 temp/ 內的真實 HEIC 樣本與 HEIF／HEVC 延伸模組"]
+    fn 真實_heic_縮圖列與_256_層級用內嵌縮圖_較大層級完整解碼() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/20250602_112538943_iOS.heic");
+        for edge in [THUMBNAIL_SIZE, 256] {
+            let start = Instant::now();
+            let (image, source) = decode_thumbnail(&path, edge).unwrap();
+            assert_eq!(source, ThumbnailSource::Embedded, "長邊 {edge}");
+            assert_eq!(image.height(), edge, "直式：長邊為高");
+            assert!(image.width() < image.height());
+            eprintln!("內嵌縮圖 {edge}：{:?}", start.elapsed());
+        }
+        let (image, source) = decode_thumbnail(&path, 384).unwrap();
+        assert_eq!(
+            source,
+            ThumbnailSource::Decoded,
+            "內嵌縮圖長邊 320 不足 384"
+        );
+        assert_eq!(image.height(), 384);
+    }
     fn load(manager: &mut ThumbnailManager, ctx: &egui::Context, path: &Path) {
         let start = Instant::now();
         loop {

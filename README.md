@@ -11,6 +11,7 @@ ayon\) 開發的高效能桌面圖片瀏覽、非破壞式編輯與重複圖片�
 - **雙圖同步比對**：原圖對照或外部唯讀參考圖，雙向視口同步。
 - **重複圖片檢查器**：多執行緒 pHash + MD5 批次計算，Union-Find 聚類分群，支援移至資源回收桶。
 - **壓縮檔支援**：直接唯讀預覽 7z / zip 壓縮包內圖片。
+- **HEIC／HEIF／AVIF 讀取**：透過 Windows 內建解碼（WIC）開啟手機照片，自動校正方向並將 Display P3 等色彩轉為 sRGB；需安裝 Microsoft Store 的「HEIF Image Extension」與「HEVC Video Extensions」（AVIF 需「AV1 Video Extension」），缺少時程式會提示安裝。此類格式只能讀取，儲存時改為另存（預設 JPEG），不會覆寫原檔。
 
 ## 專案結構 (Cargo Workspace)
 - \crates/core-image\：影像解碼、EXIF 校正、Rayon 平行微調管線、原子存檔

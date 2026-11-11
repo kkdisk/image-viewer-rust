@@ -1,6 +1,8 @@
 # HEIC／HEIF 支援規格（草案）
 
-日期：2026-11-12。狀態：**草案第 3 版**。已納入審查的 5 項修正、使用者決策（第 7 節）與 [T0 技術驗證](SPIKE_HEIC_WIC.md) 結果；WIC 路線經實測可行。尚未授權實作，版本暫定 0.9.0。
+日期：2026-11-12。狀態：**定稿，T1～T7 已實作，於 0.9.0 交付**。已納入審查的 5 項修正、使用者決策（第 7 節）與 [T0 技術驗證](SPIKE_HEIC_WIC.md) 結果；驗證見 [交付前驗證](VALIDATION_HEIC.md)。
+
+實作對照：格式清單 `core-image/src/formats.rs`；容器探測 `core-image/src/heif/probe.rs`；WIC 後端 `core-image/src/heif/wic.rs`；入口分流 `core-image/src/io.rs`；安裝指引 `app-ui/src/codec_help.rs`；儲存流程 `app-ui/src/app.rs`（測試 `read_only_save_tests.rs`）；日期有界讀取 `app-ui/src/photo_index.rs`；內嵌縮圖 `app-ui/src/thumbnail_loader.rs`。
 
 ## 1. 目標與範圍
 
@@ -138,7 +140,7 @@ T0 實測確認方案 A 可行（解碼、尺寸預檢、方向、色彩轉換�
 | 2 | AVIF | 同批支援；錯誤對應依 3.3 節「已啟用 AVIF」列 |
 | 3 | HEIC／AVIF 來源按「儲存」 | 另存 JPEG |
 | 4 | 缺少延伸模組 | 提供「開啟 Microsoft Store」按鈕，依缺少的元件（HEIF、HEVC、AV1）開啟對應頁面；產品連結須在 T3 前以官方頁面確認，無法確認時改為只顯示文字說明。以 `ms-windows-store://pdp/?ProductId=…` 交給系統開啟，不新增依賴 |
-| 5 | 版本 | 暫定 0.9.0，待使用者確認 |
+| 5 | 版本 | 0.9.0（使用者 2026-11-12 確認） |
 
 ## 8. macOS（後續範圍，不在本版）
 
