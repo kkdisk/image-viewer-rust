@@ -20,6 +20,27 @@ pub(crate) struct PhotoBrowser {
     error: bool,
 }
 
+const GRID_MIN_CELL_WIDTH: f32 = 154.0;
+const GRID_ROW_HEIGHT: f32 = 168.0;
+/// 圖片區四周內距；下方另保留檔名與日期兩列（共 44 點）。
+const GRID_IMAGE_INSET: f32 = 8.0;
+const GRID_CAPTION_HEIGHT: f32 = 44.0;
+
+/// 依可用寬度回傳欄數與格子寬度；繪製與縮圖尺寸選擇共用同一幾何。
+fn grid_layout(available_width: f32, spacing: f32) -> (usize, f32) {
+    let columns = (available_width / GRID_MIN_CELL_WIDTH).floor().max(1.0) as usize;
+    let width = (available_width / columns as f32 - spacing).max(1.0);
+    (columns, width)
+}
+
+/// 格子內實際放置縮圖的區域大小（邏輯點）。
+fn grid_image_box(cell_width: f32) -> egui::Vec2 {
+    vec2(
+        (cell_width - GRID_IMAGE_INSET * 2.0).max(1.0),
+        GRID_ROW_HEIGHT - GRID_IMAGE_INSET - GRID_CAPTION_HEIGHT,
+    )
+}
+
 fn valid_day(day: &str) -> bool {
     let b = day.as_bytes();
     if b.len() != 10
@@ -85,11 +106,11 @@ impl ImageViewerApp {
             && result.revision == revision
             && browser.request == Some(result.id)
         {
-            let filter = self.playlist.date_filter().clone();
-            self.playlist.set_captured_dates(result.dates);
+            self.playlist.apply_captured_dates(
+                result.dates,
+                self.session.as_ref().and_then(|s| s.source_path()),
+            );
             browser.days = result.days;
-            self.playlist
-                .set_date_filter(filter, self.session.as_ref().and_then(|s| s.source_path()));
             browser.request = None;
             browser.completed = true;
         }
@@ -313,9 +334,22 @@ impl ImageViewerApp {
             });
             return;
         }
-        let columns = (ui.available_width() / 154.0).floor().max(1.0) as usize;
-        let width = (ui.available_width() / columns as f32 - ui.spacing().item_spacing.x).max(1.0);
-        let row_height = 168.0;
+        let (columns, width) = grid_layout(ui.available_width(), ui.spacing().item_spacing.x);
+        let row_height = GRID_ROW_HEIGHT;
+        // 縮圖尺寸依實際圖片區與 DPI 決定，預算須容納整頁可見格子以免反覆汰換解碼。
+        let ppp = ui.ctx().pixels_per_point();
+        let edge = crate::thumbnail_loader::grid_thumbnail_edge(
+            self.grid_thumbnails.edge(),
+            grid_image_box(width),
+            ppp,
+        );
+        self.grid_thumbnails.set_edge(edge);
+        let visible_rows = (ui.available_height() / row_height).ceil() as usize + 1;
+        self.grid_thumbnails
+            .set_budget(crate::thumbnail_loader::grid_thumbnail_budget(
+                visible_rows * columns,
+                edge,
+            ));
         let mut selected = None;
         egui::ScrollArea::vertical()
             .id_salt(("photo_grid", self.playlist.catalog_revision()))
@@ -353,13 +387,12 @@ impl ImageViewerApp {
                                         egui::Stroke::new(1.5_f32, ThemeColors::ACCENT),
                                     );
                                 }
-                                let image_rect = Rect::from_min_max(
-                                    rect.min + vec2(8.0, 8.0),
-                                    pos2(rect.max.x - 8.0, rect.max.y - 44.0),
+                                let image_rect = Rect::from_min_size(
+                                    rect.min + vec2(GRID_IMAGE_INSET, GRID_IMAGE_INSET),
+                                    grid_image_box(width),
                                 );
                                 if ui.is_rect_visible(rect)
-                                    && let Some(texture) =
-                                        self.thumbnail_manager.get_or_request(path)
+                                    && let Some(texture) = self.grid_thumbnails.get_or_request(path)
                                 {
                                     let size = texture.size_vec2();
                                     let scale = (image_rect.width() / size.x)
@@ -411,7 +444,10 @@ impl ImageViewerApp {
                                     ThemeColors::TEXT_SECONDARY,
                                 );
                                 let clicked = response.clicked();
-                                response.on_hover_text(format!("{}\n{}", path.display(), date));
+                                // 只在懸停時組字串，避免每幀為所有可見格子配置提示文字。
+                                response.on_hover_ui(|ui| {
+                                    ui.label(format!("{}\n{}", path.display(), date));
+                                });
                                 if clicked {
                                     selected = Some(index);
                                 }
@@ -658,6 +694,37 @@ mod tests {
         }
     }
     #[test]
+    fn 各長寬比與欄寬在高_dpi_下總覽縮圖都不放大() {
+        for available in [160.0_f32, 300.0, 460.0, 800.0, 1920.0, 3840.0] {
+            let (_, width) = grid_layout(available, 8.0);
+            let image_box = grid_image_box(width);
+            for ppp in [1.0_f32, 1.25, 1.5, 2.0, 3.0] {
+                let edge = crate::thumbnail_loader::grid_thumbnail_edge(0, image_box, ppp);
+                for (w, h) in [
+                    (3.0_f32, 2.0_f32),
+                    (1.0, 1.0),
+                    (3.0, 1.0),
+                    (2.0, 3.0),
+                    (1.0, 3.0),
+                ] {
+                    // 來源夠大時縮圖長邊等於層級，另一邊依比例。
+                    let scale = edge as f32 / w.max(h);
+                    let thumb = vec2(w * scale, h * scale);
+                    let fit = (image_box.x / w).min(image_box.y / h);
+                    let shown = vec2(w * fit, h * fit) * ppp;
+                    assert!(
+                        shown.x <= thumb.x + 1.0 && shown.y <= thumb.y + 1.0,
+                        "可用 {available} 點、DPI {ppp}、比例 {w}:{h}：顯示 {shown:?} 超過縮圖 {thumb:?}"
+                    );
+                }
+            }
+        }
+        // 審查情境：可用 300 點為一欄、3:1 全景、200% DPI 需 552px。
+        let (columns, width) = grid_layout(300.0, 8.0);
+        assert_eq!(columns, 1);
+        assert!(crate::thumbnail_loader::grid_thumbnail_edge(0, grid_image_box(width), 2.0) >= 552);
+    }
+    #[test]
     fn 日期篩選拒絕不存在的日期與非日期文字() {
         for day in ["2024-02-29", "2025-12-31", "2000-02-29"] {
             assert!(valid_day(day));
@@ -764,7 +831,7 @@ mod tests {
         let output = draw(&mut app, vec![]);
         assert!(output.shapes.len() < 300, "虛擬化不得繪製整個清單");
         assert!(
-            app.thumbnail_manager.pending_count() <= 25,
+            app.grid_thumbnails.pending_count() <= 25 && app.thumbnail_manager.pending_count() == 0,
             "只請求可見列，不能預載整個相簿"
         );
         for pressed in [true, false] {

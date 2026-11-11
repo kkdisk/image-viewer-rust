@@ -56,6 +56,8 @@ pub struct ImageViewerApp {
     pub playlist: ImagePlaylist,
     /// 非同步縮圖生成與快取管理器
     pub thumbnail_manager: ThumbnailManager,
+    /// 縮圖總覽專用的高解析縮圖快取，與膠卷列分開以免互相擠出
+    pub(crate) grid_thumbnails: ThumbnailManager,
     /// 側邊微調面板目前滑桿參數
     pub slider_params: AdjustmentParams,
     /// 像素微調防抖背景運算排程器
@@ -138,6 +140,7 @@ impl Default for ImageViewerApp {
             active_display: Default::default(),
             playlist: ImagePlaylist::new(),
             thumbnail_manager: ThumbnailManager::new(),
+            grid_thumbnails: ThumbnailManager::for_grid(),
             slider_params: AdjustmentParams::default(),
             debouncer: AdjustmentDebouncer::new(),
             pending_adjustment: None,
@@ -392,11 +395,12 @@ impl ImageViewerApp {
                 loaded.playlist.select_opened_file(&loaded.path);
             }
         }
-        loaded.playlist.set_sort(self.preferences.current.sort);
+        loaded.playlist.ensure_sort(self.preferences.current.sort);
         self.debouncer.cancel_pending();
         self.pending_adjustment = None;
-        self.thumbnail_manager
-            .set_scope(loaded.playlist.cache_scope());
+        let scope = loaded.playlist.cache_scope();
+        self.thumbnail_manager.set_scope(scope.clone());
+        self.grid_thumbnails.set_scope(scope);
         self.playlist = loaded.playlist;
         self.photo_browser.grid_open = false;
         self.session = Some(EditingSession::new(loaded.pixels, Some(loaded.path)));
@@ -978,7 +982,14 @@ impl eframe::App for ImageViewerApp {
         }
 
         // 4. 接收背景縮圖結果並同步 GPU 主紋理與直方圖
+        // 總覽與膠卷列不會同時顯示；放棄隱藏那組的排隊工作，避免兩組同時解碼。
+        if self.photo_browser.grid_open && !self.browsing.fullscreen {
+            self.thumbnail_manager.cancel_pending();
+        } else {
+            self.grid_thumbnails.cancel_pending();
+        }
         self.thumbnail_manager.poll_results(ctx);
+        self.grid_thumbnails.poll_results(ctx);
         self.sync_texture(ctx);
         self.sync_histogram();
         if self.histogram_pending && self.show_side_panel {

@@ -104,9 +104,9 @@ impl ImageViewerApp {
                                 self.playlist.date_filter().clone(),
                                 Some(&scan.path),
                             );
-                            list.set_sort(self.preferences.current.sort);
+                            list.ensure_sort(self.preferences.current.sort);
                             self.playlist = list;
-                            self.thumbnail_manager.clear();
+                            self.clear_thumbnails();
                             self.convenience.info = scan.info;
                             if reload && exists && self.slider_params == scan.params {
                                 let _ = self.open_image_path_unchecked(scan.path);
@@ -229,7 +229,7 @@ impl ImageViewerApp {
                 self.reference_texture = None;
                 self.reference_image = None;
                 self.comparison.is_active = false;
-                self.thumbnail_manager.clear();
+                self.clear_thumbnails();
                 if let Some(path) = next {
                     let _ = self.open_image_path_unchecked(path);
                 }

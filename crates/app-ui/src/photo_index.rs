@@ -12,6 +12,8 @@ use std::{
 };
 
 const HEADER_LIMIT: u64 = 512 * 1024;
+/// 首段讀取量；多數相機 JPEG 的 Exif APP1 位於此範圍內。
+const FIRST_CHUNK: u64 = 64 * 1024;
 const CACHE_LIMIT: usize = 100_000;
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Stamp(u64, Option<SystemTime>);
@@ -20,12 +22,69 @@ fn stamp(path: &Path) -> Option<Stamp> {
     Some(Stamp(meta.len(), meta.modified().ok()))
 }
 fn read_date(path: &Path) -> Option<String> {
+    read_date_from(std::fs::File::open(path).ok()?)
+}
+/// JPEG 前段是否已足以判定 EXIF；只有確定不需再讀時才回傳 true。
+///
+/// 逐段走訪標記：讀到影像資料（SOS）或結尾前仍無 Exif APP1，代表沒有 EXIF；
+/// Exif APP1 整段都在緩衝區內，代表再讀也不會改變結果。段落被截斷或非 JPEG 一律回傳 false。
+fn jpeg_exif_settled(bytes: &[u8]) -> bool {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return false;
+    }
+    let mut i = 2;
+    loop {
+        // 標記前可有多個 0xFF 填充位元組。
+        while bytes.get(i) == Some(&0xFF) && bytes.get(i + 1) == Some(&0xFF) {
+            i += 1;
+        }
+        let (Some(&0xFF), Some(&marker)) = (bytes.get(i), bytes.get(i + 1)) else {
+            return false;
+        };
+        match marker {
+            0xDA | 0xD9 => return true,
+            0x01 | 0xD0..=0xD7 => {
+                i += 2;
+                continue;
+            }
+            _ => {}
+        }
+        let Some(length) = bytes
+            .get(i + 2..i + 4)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]) as usize)
+        else {
+            return false;
+        };
+        let end = i + 2 + length;
+        if marker == 0xE1 && bytes.get(i + 4..i + 10) == Some(b"Exif\0\0") {
+            return end <= bytes.len();
+        }
+        if length < 2 {
+            return false;
+        }
+        i = end;
+    }
+}
+/// 漸進讀取：先讀首段，只有無法確定結果時才補讀至 512 KiB 上限。
+fn read_date_from(mut reader: impl Read) -> Option<String> {
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(HEADER_LIMIT)
+    (&mut reader)
+        .take(FIRST_CHUNK)
         .read_to_end(&mut bytes)
         .ok()?;
+    if let Some(date) = parse_date(&bytes) {
+        return Some(date);
+    }
+    if (bytes.len() as u64) < FIRST_CHUNK || jpeg_exif_settled(&bytes) {
+        return None;
+    }
+    reader
+        .take(HEADER_LIMIT - FIRST_CHUNK)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    parse_date(&bytes)
+}
+fn parse_date(bytes: &[u8]) -> Option<String> {
     let metadata = core_image::exif::read_photo_metadata_from_reader(&mut Cursor::new(bytes));
     let mut date = (metadata.datetime_source == Some("拍攝時間"))
         .then_some(metadata.captured_at)
@@ -227,6 +286,80 @@ mod tests {
             std::fs::write(&path, bytes).unwrap();
             assert!(read_date(&path).is_none());
         }
+    }
+    /// 組合 JPEG：SOI、指定的前置 APP2 填充段、可選 Exif APP1、SOS 與尾端資料。
+    fn jpeg(padding: &[usize], exif: bool, tail: usize) -> Vec<u8> {
+        let mut out = vec![0xFF, 0xD8];
+        for &size in padding {
+            out.extend_from_slice(&[0xFF, 0xE2]);
+            out.extend_from_slice(&((size + 2) as u16).to_be_bytes());
+            out.resize(out.len() + size, 0);
+        }
+        if exif {
+            let mut payload = b"Exif\0\0".to_vec();
+            payload.extend(tiff(true, "2024:02:29 12:30:00", 44));
+            out.extend_from_slice(&[0xFF, 0xE1]);
+            out.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+            out.extend(payload);
+        }
+        out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02]);
+        out.resize(out.len() + tail, 0x55);
+        out
+    }
+    fn read_counted(bytes: Vec<u8>) -> (Option<String>, u64) {
+        let mut cursor = Cursor::new(bytes);
+        let date = read_date_from(&mut cursor);
+        (date, cursor.position())
+    }
+    #[test]
+    fn 漸進讀取在可確定結果時只讀首段且不漏掉後方_exif() {
+        let date = Some("2024-02-29 12:30:00".to_owned());
+        // 常見相機 JPEG：Exif 在檔頭，只讀首段。
+        assert_eq!(
+            read_counted(jpeg(&[], true, 1 << 20)),
+            (date.clone(), FIRST_CHUNK)
+        );
+        // 無 EXIF 的大 JPEG：首段已見影像資料起點，不補讀。
+        assert_eq!(
+            read_counted(jpeg(&[100], false, 1 << 20)),
+            (None, FIRST_CHUNK)
+        );
+        // 大型 ICC 等前置段把 Exif 推到 64 KiB 之後：補讀後仍取得日期。
+        let (found, read) = read_counted(jpeg(&[60_000, 60_000], true, 1 << 20));
+        assert_eq!(found, date);
+        assert_eq!(read, HEADER_LIMIT);
+        // Exif APP1 跨越首段邊界：判定未完整，補讀。
+        let (found, _) = read_counted(jpeg(&[FIRST_CHUNK as usize - 100], true, 1 << 20));
+        assert_eq!(found, date);
+        // 超過上限仍不讀取，維持原有界契約。
+        assert_eq!(
+            read_counted(jpeg(&[65_000; 9], true, 1 << 20)),
+            (None, HEADER_LIMIT)
+        );
+        // 小檔案一次讀完即結束。
+        let small = jpeg(&[], false, 10);
+        let length = small.len() as u64;
+        assert_eq!(read_counted(small), (None, length));
+    }
+    #[test]
+    fn jpeg_段落判定只在確定時停止() {
+        assert!(jpeg_exif_settled(&jpeg(&[], false, 0)));
+        assert!(jpeg_exif_settled(&jpeg(&[10], true, 0)));
+        let full = jpeg(&[], true, 0);
+        assert!(!jpeg_exif_settled(&full[..full.len() - 10]), "APP1 被截斷");
+        assert!(
+            !jpeg_exif_settled(&[0xFF, 0xD8, 0xFF, 0xE2, 0x00]),
+            "段長不完整"
+        );
+        assert!(
+            !jpeg_exif_settled(&[0xFF, 0xD8, 0xFF, 0xE2, 0x00, 0x00]),
+            "段長無效"
+        );
+        assert!(!jpeg_exif_settled(b"II\x2a\0"), "非 JPEG 交由上限讀取");
+        assert!(
+            jpeg_exif_settled(&[0xFF, 0xD8, 0xFF, 0xFF, 0xD0, 0xFF, 0xD9]),
+            "填充與獨立標記"
+        );
     }
     #[test]
     fn 取消過期工作不交付且最新工作及快取失效仍可完成() {

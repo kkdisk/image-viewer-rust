@@ -446,7 +446,7 @@ impl ImageViewerApp {
                     self.document_io.pending_save = None;
                     match result {
                         Ok(mut playlist) => {
-                            playlist.set_sort(self.preferences.current.sort);
+                            playlist.ensure_sort(self.preferences.current.sort);
                             let matches_current = self.session.as_ref().is_some_and(|session| {
                                 Arc::ptr_eq(&image, &session.committed_image())
                             });

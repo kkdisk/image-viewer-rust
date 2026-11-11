@@ -167,6 +167,11 @@ impl ImagePlaylist {
 
     pub fn set_sort(&mut self, sort: SortOptions) {
         let selected = self.current_file().cloned();
+        self.sort_and_rebuild(sort, selected.as_deref());
+    }
+
+    /// 排序完整來源並只重建一次可見清單，再依指定路徑恢復選取。
+    fn sort_and_rebuild(&mut self, sort: SortOptions, selected: Option<&Path>) {
         let attributes = &self.attributes;
         let captured = &self.captured;
         self.all_files.sort_by(|a, b| {
@@ -201,7 +206,15 @@ impl ImagePlaylist {
             primary.then_with(natural).then_with(|| a.cmp(b))
         });
         self.sort = sort;
-        self.rebuild_visible(selected.as_deref());
+        self.rebuild_visible(selected);
+    }
+
+    /// 不變式：每個公開的清單變更都以 `self.sort` 收尾重排，`all_files` 恆依其排序。
+    /// 因此條件相同時可跳過，避免每次開圖都在介面執行緒重排整份清單。
+    pub fn ensure_sort(&mut self, sort: SortOptions) {
+        if self.sort != sort {
+            self.set_sort(sort);
+        }
     }
 
     fn reset_catalog(&mut self) {
@@ -228,9 +241,18 @@ impl ImagePlaylist {
         self.current_index = selected.and_then(|p| self.files.iter().position(|file| file == p));
     }
     pub fn set_captured_dates(&mut self, dates: HashMap<PathBuf, String>) {
+        let selected = self.current_file().cloned();
+        self.apply_captured_dates(dates, selected.as_deref());
+    }
+    /// 交付日期索引：排序與篩選只重建一次，並以指定路徑（通常為開啟中的文件）恢復選取。
+    pub fn apply_captured_dates(
+        &mut self,
+        dates: HashMap<PathBuf, String>,
+        selected: Option<&Path>,
+    ) {
         self.captured = dates;
         self.dates_indexed = true;
-        self.set_sort(self.sort);
+        self.sort_and_rebuild(self.sort, selected);
     }
     pub fn date_filter(&self) -> &DateFilter {
         &self.date_filter
@@ -386,6 +408,61 @@ fn compare_optional<T: Ord>(a: Option<T>, b: Option<T>, descending: bool) -> std
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn 相同排序條件跳過重排且變更條件仍會重排並保留選取() {
+        let mut list = ImagePlaylist::new();
+        let names = ["相片10.jpg", "相片2.jpg", "相片1.jpg"];
+        // 變更清單的公開方法須以目前條件收尾排序，ensure_sort 才能安全跳過。
+        list.set_custom_list(names.iter().map(PathBuf::from).collect());
+        let natural: Vec<PathBuf> = ["相片1.jpg", "相片2.jpg", "相片10.jpg"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        assert_eq!(list.files(), natural.as_slice());
+        list.try_select_existing(&natural[1]);
+        list.ensure_sort(SortOptions::default());
+        assert_eq!(list.files(), natural.as_slice());
+        assert_eq!(list.current_file(), Some(&natural[1]));
+        list.ensure_sort(SortOptions {
+            mode: SortMode::Natural,
+            descending: true,
+        });
+        let reversed: Vec<_> = natural.iter().rev().cloned().collect();
+        assert_eq!(list.files(), reversed.as_slice());
+        assert_eq!(list.current_file(), Some(&natural[1]));
+    }
+    #[test]
+    fn 日期交付一次重建並以開啟中文件恢復選取() {
+        let mut list = ImagePlaylist::new();
+        let a = PathBuf::from("一.jpg");
+        let b = PathBuf::from("二.jpg");
+        list.set_custom_list(vec![a.clone(), b.clone()]);
+        list.set_sort(SortOptions {
+            mode: SortMode::Captured,
+            descending: false,
+        });
+        // 開啟中的 b 在索引前被篩除，清單選取已遺失。
+        list.set_date_filter(DateFilter::Day("2025-01-02".into()), Some(&b));
+        assert!(list.current_index().is_none());
+        let revision = list.catalog_revision();
+        list.apply_captured_dates(
+            HashMap::from([
+                (a.clone(), "2025-01-03 09:00:00".into()),
+                (b.clone(), "2025-01-02 09:00:00".into()),
+            ]),
+            Some(&b),
+        );
+        assert_eq!(list.files(), std::slice::from_ref(&b));
+        assert_eq!(list.current_file(), Some(&b));
+        assert_eq!(list.date_filter(), &DateFilter::Day("2025-01-02".into()));
+        assert_eq!(
+            list.catalog_revision(),
+            revision,
+            "日期交付不得改變來源版本"
+        );
+        list.set_date_filter(DateFilter::All, Some(&b));
+        assert_eq!(list.files(), &[b.clone(), a.clone()], "依拍攝時間排序");
+    }
     #[test]
     fn 未完成日期索引不得把尚未讀取的來源當成無日期() {
         let mut list = ImagePlaylist::new();
