@@ -5,6 +5,7 @@ pub mod app;
 pub mod archive_loader;
 pub mod browsing;
 pub mod canvas;
+mod codec_help;
 pub mod convenience;
 pub mod debounce_queue;
 mod display_texture;

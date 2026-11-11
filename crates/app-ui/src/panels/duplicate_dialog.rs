@@ -546,16 +546,12 @@ fn prepare_group_metadata(groups: Vec<DuplicateGroup>) -> Vec<DuplicateGroupUi> 
 
 /// 遞迴或非遞迴掃描圖片檔案
 fn collect_image_files(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
-    let supported_exts = ["jpg", "jpeg", "png", "bmp", "webp", "gif", "tiff", "tif"];
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                    let ext_lower = ext.to_lowercase();
-                    if supported_exts.contains(&ext_lower.as_str()) {
-                        out.push(path);
-                    }
+                if core_image::formats::is_readable_extension(&path) {
+                    out.push(path);
                 }
             } else if recursive && path.is_dir() {
                 collect_image_files(&path, true, out);

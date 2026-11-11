@@ -21,6 +21,8 @@ use crate::thumbnail_loader::ThumbnailManager;
 pub struct ImageViewerApp {
     pub(crate) image_clipboard: crate::image_clipboard::ImageClipboard,
     pub(crate) photo_browser: crate::photo_browser::PhotoBrowser,
+    /// 缺少系統解碼元件時顯示安裝指引的編碼
+    pub(crate) codec_help: Option<core_image::heif::Codec>,
     pub(crate) presets: crate::toning_presets::PresetState,
     pub(crate) geometry: Option<crate::geometry_editor::GeometryDraft>,
     pub(crate) export: crate::export_dialog::ExportState,
@@ -115,6 +117,7 @@ impl Default for ImageViewerApp {
         Self {
             image_clipboard: Default::default(),
             photo_browser: Default::default(),
+            codec_help: None,
             presets: Default::default(),
             geometry: None,
             export: Default::default(),
@@ -428,18 +431,20 @@ impl ImageViewerApp {
 
     /// 彈出原生系統檔案選取對話框
     pub fn open_file_dialog(&mut self) {
+        use core_image::formats::{READABLE_EXTENSIONS, filter_label};
+        const ARCHIVES: &[&str] = &["zip", "7z"];
+        let all: Vec<&str> = READABLE_EXTENSIONS
+            .iter()
+            .chain(ARCHIVES)
+            .copied()
+            .collect();
         let file = rfd::FileDialog::new()
+            .add_filter(filter_label("支援的檔案", &all), &all)
             .add_filter(
-                "支援的檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.zip, *.7z)",
-                &[
-                    "png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif", "zip", "7z",
-                ],
+                filter_label("圖片檔案", READABLE_EXTENSIONS),
+                READABLE_EXTENSIONS,
             )
-            .add_filter(
-                "圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)",
-                &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"],
-            )
-            .add_filter("壓縮檔案 (*.zip, *.7z)", &["zip", "7z"])
+            .add_filter(filter_label("壓縮檔案", ARCHIVES), ARCHIVES)
             .add_filter("所有檔案 (*.*)", &["*"])
             .pick_file();
 
@@ -452,10 +457,11 @@ impl ImageViewerApp {
 
     /// 開啟外部參考圖檔案對話框
     pub fn open_reference_image_dialog(&mut self) {
+        use core_image::formats::{READABLE_EXTENSIONS, filter_label};
         let file = rfd::FileDialog::new()
             .add_filter(
-                "圖片檔案 (*.png, *.jpg, *.jpeg, *.bmp, *.webp, *.tiff, *.gif)",
-                &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "gif"],
+                filter_label("圖片檔案", READABLE_EXTENSIONS),
+                READABLE_EXTENSIONS,
             )
             .add_filter("所有檔案 (*.*)", &["*"])
             .pick_file();
@@ -735,12 +741,12 @@ impl ImageViewerApp {
             return false;
         }
         if let Some(session) = &self.session {
-            let dialog = rfd::FileDialog::new()
-                .add_filter("PNG 影像 (*.png)", &["png"])
-                .add_filter("JPEG 影像 (*.jpg, *.jpeg)", &["jpg", "jpeg"])
-                .add_filter("BMP 影像 (*.bmp)", &["bmp"])
-                .add_filter("WebP 影像 (*.webp)", &["webp"])
-                .add_filter("TIFF 影像 (*.tiff)", &["tiff"]);
+            // 只列可寫格式；只能解碼的格式（如 HEIC）不得出現在另存選項。
+            let dialog = core_image::formats::WRITABLE_FILTERS
+                .iter()
+                .fold(rfd::FileDialog::new(), |dialog, (name, extensions)| {
+                    dialog.add_filter(*name, extensions)
+                });
 
             let dialog = if let Some(src) = session.source_path() {
                 if let Some(parent) = src.parent() {
@@ -1341,6 +1347,7 @@ impl eframe::App for ImageViewerApp {
 
         // 10. 關於 Rust Image Viewer 彈窗
         AboutDialog::show(ctx, &mut self.show_about_dialog);
+        self.show_codec_help(ctx);
 
         // 11. 重複圖片檢查器彈窗
         if let Some(target_path) =

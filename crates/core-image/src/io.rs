@@ -9,10 +9,17 @@ use tempfile::Builder;
 
 use crate::error::ImageError;
 use crate::exif::{apply_orientation, read_orientation};
+use crate::heif;
 
 /// 安全檢查尺寸後，最多讀取兩格以辨識 GIF／WebP 動畫；不遍歷完整動畫。
 pub fn inspect_animation<P: AsRef<Path>>(path: P) -> Result<bool, ImageError> {
     use image::AnimationDecoder;
+    // HEIF 家族只顯示主影像：先套用像素上限，不交給 image crate（它無法辨識而會提前失敗）。
+    if heif::is_heif_path(path.as_ref()) {
+        let (width, height) = heif::dimensions(heif::Source::Path(path.as_ref()))?;
+        check_pixel_limit(width, height, MAX_SAFE_PIXELS)?;
+        return Ok(false);
+    }
     let reader = ImageReader::open(path.as_ref())?.with_guessed_format()?;
     let format = reader.format();
     let (width, height) = reader.into_dimensions()?;
@@ -57,6 +64,9 @@ pub fn check_pixel_limit(width: u32, height: u32, max_pixels: u64) -> Result<(),
 
 /// 僅讀取影像標頭以獲取圖片尺寸 (width, height)，不解碼像素資料
 pub fn inspect_dimensions<P: AsRef<Path>>(path: P) -> Result<(u32, u32), ImageError> {
+    if heif::is_heif_path(path.as_ref()) {
+        return heif::dimensions(heif::Source::Path(path.as_ref()));
+    }
     let reader = ImageReader::open(path)?.with_guessed_format()?;
     let (width, height) = reader.into_dimensions()?;
     Ok((width, height))
@@ -64,6 +74,9 @@ pub fn inspect_dimensions<P: AsRef<Path>>(path: P) -> Result<(u32, u32), ImageEr
 
 /// 自記憶體二進位資料讀取影像標頭以獲取圖片尺寸 (width, height)
 pub fn inspect_dimensions_from_memory(bytes: &[u8]) -> Result<(u32, u32), ImageError> {
+    if heif::is_heif_bytes(bytes) {
+        return heif::dimensions(heif::Source::Memory(bytes));
+    }
     let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     let (width, height) = reader.into_dimensions()?;
     Ok((width, height))
@@ -80,6 +93,10 @@ pub fn load_image_with_limit<P: AsRef<Path>>(
     max_pixels: u64,
 ) -> Result<DynamicImage, ImageError> {
     let path_ref = path.as_ref();
+    // HEIF 家族：平台解碼已套用容器方向，不再依 EXIF 校正以免重複旋轉。
+    if heif::is_heif_path(path_ref) {
+        return heif::decode(heif::Source::Path(path_ref), max_pixels);
+    }
     let file = File::open(path_ref)?;
     let mut buf_reader = BufReader::new(file);
 
@@ -111,6 +128,9 @@ pub fn load_image_from_memory_with_limit(
     bytes: &[u8],
     max_pixels: u64,
 ) -> Result<DynamicImage, ImageError> {
+    if heif::is_heif_bytes(bytes) {
+        return heif::decode(heif::Source::Memory(bytes), max_pixels);
+    }
     let mut cursor = Cursor::new(bytes);
 
     // 1. 預檢尺寸

@@ -59,8 +59,9 @@ pub fn find_native_7z() -> Option<PathBuf> {
 }
 
 /// 支援的圖片副檔名清單
-pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] =
-    &["jpg", "jpeg", "png", "bmp", "webp", "gif", "tiff", "tif"];
+pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "bmp", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
+];
 
 /// 判斷檔案是否為支援的圖片格式
 pub fn is_image_extension(path: &Path) -> bool {

@@ -53,6 +53,8 @@ enum Completion {
         id: u64,
         reference: bool,
         result: Result<Box<LoadedImage>, String>,
+        /// 失敗原因為缺少系統解碼元件時的編碼，用於顯示安裝指引。
+        missing_codec: Option<core_image::heif::Codec>,
     },
     Write {
         id: u64,
@@ -166,17 +168,21 @@ impl Default for DocumentIo {
                                     reference: task.reference,
                                     animated,
                                 })
-                            })
-                            .map_err(|error| error.to_string());
+                            });
+                        let missing_codec = match &result {
+                            Err(core_image::ImageError::CodecMissing { codec }) => Some(*codec),
+                            _ => None,
+                        };
                         let result = match result {
                             Ok(Some(loaded)) => Ok(loaded),
                             Ok(None) => continue,
-                            Err(error) => Err(error),
+                            Err(error) => Err(error.to_string()),
                         };
                         Completion::Read {
                             id: task.id,
                             reference: task.reference,
                             result: result.map(Box::new),
+                            missing_codec,
                         }
                     }
                     Task::Write { id, path, image } => {
@@ -373,6 +379,7 @@ impl ImageViewerApp {
                     id,
                     reference,
                     result,
+                    missing_codec,
                 } => {
                     let valid = if reference {
                         self.document_io.pending_reference == Some(id)
@@ -418,7 +425,10 @@ impl ImageViewerApp {
                         }
                         Ok(loaded) => self.install_loaded_image(*loaded),
                         Err(error) => {
-                            if let Some(path) = attempted_path {
+                            // 缺少系統解碼元件時檔案本身無誤：保留最近清單並提供安裝指引。
+                            if let Some(codec) = missing_codec {
+                                self.codec_help = Some(codec);
+                            } else if let Some(path) = attempted_path {
                                 self.remove_recent(path);
                             }
                             let message = if self.slideshow.playing {

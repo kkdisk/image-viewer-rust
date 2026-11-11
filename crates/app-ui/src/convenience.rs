@@ -13,21 +13,21 @@ pub struct FileInfo {
     pub bytes: Option<u64>,
     pub modified: Option<SystemTime>,
     pub format: String,
+    /// 色彩處理說明（例如 HEIF 的 ICC 轉換或「色彩未轉換」）；一般格式為 `None`。
+    pub color: Option<String>,
 }
 
 impl FileInfo {
     pub(crate) fn read(path: &Path) -> Self {
         let metadata = std::fs::metadata(path).ok();
+        let (format, color) = core_image::formats::describe(path);
         Self {
             photo: core_image::exif::read_photo_metadata(path),
             full_path: std::path::absolute(path).ok(),
             bytes: metadata.as_ref().map(|m| m.len()),
             modified: metadata.and_then(|m| m.modified().ok()),
-            format: image::ImageReader::open(path)
-                .ok()
-                .and_then(|r| r.with_guessed_format().ok())
-                .and_then(|r| r.format())
-                .map_or_else(|| "未知".into(), |f| format!("{f:?}")),
+            format,
+            color,
         }
     }
 }
@@ -238,6 +238,9 @@ impl ImageViewerApp {
         }
         ui.label(format!("尺寸：{} × {} px", dimensions.0, dimensions.1));
         ui.label(format!("格式：{}", info.format));
+        if let Some(color) = &info.color {
+            ui.label(format!("色彩：{color}"));
+        }
         ui.label(format!(
             "檔案大小：{}",
             info.bytes.map_or_else(

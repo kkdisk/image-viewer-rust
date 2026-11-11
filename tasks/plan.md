@@ -1,3 +1,80 @@
+## HEIC T1～T3 實作（2026-11-12，使用者已授權）
+
+- [x] T1：core-image 新增 `formats`（可讀清單、可寫另存篩選、篩選說明）；播放清單、查重、開檔／參考圖／另存對話框改引用；core-archive 保留自有常數，加上 app-ui 跨套件一致性測試。開檔篩選順帶補上原本遺漏的 `tif`。
+- [x] T2a：`heif::probe` 有界 ISOBMFF 探測（容器家族、`pitm`／`iinf`／`iref dimg` 主影像編碼、`ipma`／`colr` 的 ICC 或 nclx；`meta` 上限 512 KiB、`mdat` 以 Seek 略過）；截斷、損毀與超大宣告不 panic。
+- [x] T2b：`heif::wic` 後端（每執行緒 MTA、工廠快取、記憶體串流、P3 ICC→sRGB、失敗降級、內嵌縮圖）；六個入口全數分流，HEIF 不再依 EXIF 旋轉；新增 `ImageError::CodecMissing`／`Platform`。
+- [x] T3：可讀清單加入 heic／heif／avif；資訊面板顯示「HEIF（HEVC）」與色彩說明；缺少元件時跳出安裝指引視窗（HEIF／HEVC／AV1 的 Microsoft Store 按鈕，產品 ID 已以官方頁面標題核對，發行者與價格未取得），且不從最近清單移除。
+- [x] 測試：工作區 215 項通過、5 項忽略（含 2 項真實樣本測試，本機以 `--ignored` 執行皆通過）；Clippy（-D warnings）、格式與發布建置通過。
+- [x] 檢查點 1（部分，2026-11-12 使用者截圖）：使用者實際相簿 34 張 iPhone 14 Pro HEIC，直式與橫式方向正確、P3 轉 sRGB 說明、格式／相機／含時區拍攝時間、縮圖列及依拍攝時間排序皆正常。
+- [ ] 檢查點 1 其餘：縮圖總覽、查重、ZIP 內 HEIC、缺少延伸模組提示（本機無法重現）。第一張截圖的 100% 縮放經使用者確認為手動放大，非缺陷。
+- 已知限制（待後續任務）：HEIC 按「儲存」會回報不支援的格式（T4）；縮圖使用完整解碼，每張約 0.4～0.7 秒（T6）；`mdat` 在前的 HEIF 日期索引尚未有界定位（T5）。AVIF 尚無樣本驗證。
+## HEIC 規格審查（2026-11-11，僅審查）
+
+- [x] 對照規格、目前開圖前置檢查、公開解碼 API、模組依賴、既有 EXIF 容器解析及 Microsoft／AOM 官方文件。
+- [x] P1 已修（規格 3.2）：`inspect_animation`、`load_image_with_limit`、`load_image_from_memory(_with_limit)`、`inspect_dimensions(_from_memory)` 全數列入分流表；格式標籤改用 core-image 辨識函式。已核對 `document_io.rs:142` 先呼叫 `inspect_animation`。
+- [x] P2 已修（規格 3.1）：不新增 core-archive → core-image 依賴；core-image 定義可讀／可寫兩份清單，core-archive 保留自有常數，由 app-ui 跨套件一致性測試防止不同步；HEIC 不得出現在另存篩選。另確認主規格第 183 行禁止 C/C++ 外部動態連結依賴，方案 B 改標為違反主規格。
+- [x] P2 已修（規格 3.3）：容器家族與實際編碼分兩層判定（`pitm`＋`iinf`／`infe` 項目類型，`grid` 依分塊判定，相容品牌輔助），並列出 HEVC／AV1（啟用與否）／其他的錯誤訊息對應；AVIF 未啟用時不得提示安裝 HEVC。
+- [x] P2 已修（規格 4.1）：非 sRGB（ICC／`nclx`，如 Display P3）以 IWICColorTransform 轉 sRGB 再量化；轉換不可用時降級顯示並在資訊面板標示；匯出為 sRGB 像素；驗收加入 P3 與 sRGB 樣本。
+- [x] P2 已修（規格 5.1）：512 KiB 定義為每檔累計讀取量與配置總量上限，不是檔案位置上限；HEIF 改用有界 Seek reader 搭配 `kamadak-exif`，需先確認其是否依宣告長度預先配置；越界一律列為無可用日期。自行解析 `meta`／`iloc` 改為 T0 證明不足時的後備。
+- 本輪未修改規格或產品程式，未執行測試或 HEIC／WIC 技術驗證；T0 與方案決策仍待後續。
+## HEIC／HEIF 支援規劃（2026-11-11，僅規劃，尚未授權實作）
+
+規格草案（第 2 版）：[SPEC_HEIC_SUPPORT.md](../docs/SPEC_HEIC_SUPPORT.md)。WIC 路線為 T0 驗證候選：沿用已在依賴中的 `windows` 0.62.2，不新增 crate、不附帶 HEVC 解碼器，維持單一 exe 封裝；libheif 違反主規格的「不得引入 C/C++ 外部動態連結依賴」。本機已安裝 HEIF 1.2.62、HEVC 2.5.48、AV1 2.0.35 延伸模組，可做技術驗證。
+
+現況盤點：像素解碼的公開 API 為 `load_image(_with_limit)` 與 `load_image_from_memory(_with_limit)`；文件載入會先呼叫 `inspect_animation`；查重使用 `inspect_dimensions`；資訊面板直接用 `ImageReader` 取格式標籤。支援副檔名清單有 4 份：`playlist.rs`、`core-archive/archive.rs`、`duplicate_dialog.rs`、`app.rs` 開檔與另存對話框。core-image 與 core-archive 依主規格彼此獨立。
+
+依賴順序：T0（已完成）→ 使用者授權實作 → T1 → T2a → T2b → T3 →（檢查點 1）→ T4、T5 → T6 → T7 →（檢查點 2）。
+
+### T0：WIC 技術驗證（已完成 2026-11-12，見 [SPIKE_HEIC_WIC.md](../docs/SPIKE_HEIC_WIC.md)）
+- 內容：以本機樣本實測：
+  - COM 執行緒模型（含 rayon 執行緒）、解碼前取得尺寸、以 `IStream` 解碼記憶體來源。
+  - `irot`／`imir` 與 EXIF 方向是否已由 WIC 套用。
+  - 色彩：取得 ICC／`nclx`、IWICColorTransform 轉 sRGB 是否可用，並定義 P3 樣本的比對容差；10 位元的像素格式與轉換順序。
+  - 網格分塊、`pitm`／`iinf` 編碼判定在 HEVC 與 AVIF 樣本上的結果。
+  - `kamadak-exif` 搭配有界 Seek reader 的實際讀取量，以及它是否依 `iloc` 宣告長度預先配置記憶體；Exif 在檔案中的位置分布。
+  - 12MP／48MP 解碼耗時、內嵌縮圖或縮放解碼、缺少元件時的錯誤碼、能否以 WIC 編碼產生測試樣本。
+- 驗收：結果寫入 `docs/SPIKE_HEIC_WIC.md`，含延伸模組版本；規格第 7 節待決事項附上建議答案。
+- 前置：需要使用者提供 iPhone 樣本（含直式、Display P3），或同意使用授權可確認的公開樣本。
+
+### T1：可讀／可寫格式清單（S，無行為變更）
+- 內容：core-image 定義 `READABLE_EXTENSIONS` 與 `WRITABLE_EXTENSIONS`；app-ui 的播放清單、查重、開檔篩選改引用可讀清單，另存與匯出篩選改引用可寫清單；core-archive 保留自有常數，不新增依賴；app-ui 新增跨套件一致性測試。
+- 驗收：既有測試全過；一致性測試通過；以 grep 確認 app-ui 不再有自寫清單。
+- 檔案：`core-image/src/lib.rs`、`playlist.rs`、`duplicate_dialog.rs`、`app.rs`、`app-ui/tests/`（新增一致性測試）。
+
+### T2a：容器與編碼判定（S～M）
+- 內容：在 core-image 新增有界 ISOBMFF box 掃描：容器家族（主品牌與相容品牌）、`pitm`＋`iinf`／`infe` 項目類型、`grid` 分塊類型，以及主影像 `ipma` 關聯的 `colr`（`prof`／`rICC` 的 ICC 位元組或 `nclx` 參數）；並提供格式辨識函式供資訊面板使用。T0 顯示 WIC 不回報色彩內容，ICC 只能由此取得。
+- 驗收：`heic`、`mif1`＋`hvc1`、`mif1`＋`av01`、`grid`、截斷與損毀 box、讀取量上限等單元測試；錯誤訊息對應表測試。
+- 檔案：`core-image/src/heif/probe.rs`（新）、`error.rs`。
+
+### T2b：WIC 解碼與入口分流（M）
+- 內容：`cfg(windows)` 的 WIC 解碼：每執行緒 COM 保護、先檢查呼叫端上限再解碼、依規格 4.1 處理色彩轉換或降級、量化為 RGBA8、依 T0 結論處理方向；新增 `ImageError::CodecMissing { codec }`。規格 3.2 表中的六個入口全數分流，`inspect_animation` 對 HEIF 回傳非動畫；非 Windows 回傳不支援。
+- 驗收：以 PNG 走 WIC 管線，測試各入口、自訂上限、記憶體來源與 rayon 執行緒；偵測到元件時執行的真實 HEIC 測試（方向、尺寸、P3 色彩容差）；Clippy 通過。
+- 檔案：`core-image/src/heif/wic.rs`（新）、`io.rs`、`Cargo.toml`（`windows` 功能 `Win32_Graphics_Imaging`）。
+
+### T3：應用整合（M）
+- 內容：可讀清單加入 heic／heif，讓縮圖列、總覽、查重一併支援；core-archive 常數同步，讓壓縮檔也支援（一致性測試把關）；資訊面板格式標籤與「色彩未轉換」標示；缺少元件與不支援 AVIF 時依規格 3.3 的狀態通知；開檔篩選加入 HEIC，另存篩選不加入。
+- 驗收：開啟含 HEIC 的資料夾（元件存在時）；錯誤訊息對應的單元測試；縮圖失敗節流不反覆解碼；另存篩選不含 HEIC 的回歸測試。
+
+### 檢查點 1
+- [ ] 全工作區測試、Clippy、格式通過；原生桌面完成開啟、瀏覽、方向、縮圖、查重的確認後，才繼續 T4。
+
+### T4：HEIC 來源的儲存流程（S～M）
+- 內容：「儲存」改開另存，預設同名 `.jpg`；「儲存並繼續」離開保護走同一流程，取消另存即取消離開；`save_image_atomic` 對 `.heic` 目標明確拒絕。
+- 驗收：儲存、離開保護、取消三種路徑的回歸測試；原檔不被覆寫。
+
+### T5：HEIF 日期索引的有界讀取（S～M）
+- 內容：HEIF 改用有界 Seek reader（累計讀取量與配置總量各 512 KiB，不限制檔案位置）交給 `kamadak-exif`；若 T0 顯示它會依宣告長度預先配置，先以 T2a 掃描取得 Exif 區段長度，超過預算即降級。越界、失敗或缺 DateTimeOriginal 一律列為無可用日期。只有在 T0 證明 `kamadak-exif` 不足時，才自行解析 `meta`／`iloc`。
+- 驗收：以 Exif 位於檔頭與檔尾的合成 ISOBMFF 樣本驗證結果與讀取量；以宣告長度異常的樣本驗證配置上限；JPEG 漸進讀取的回歸不變。
+
+### T6：內嵌縮圖加速（S～M）
+- 內容：T0 實測內嵌縮圖 240×320 約 29 ms，完整解碼約 410～495 ms。所需長邊不超過內嵌縮圖長邊時（縮圖列、總覽 256 層級）使用內嵌縮圖並套用色彩轉換；其餘完整解碼。縮放解碼只省約 25%，不採用。
+- 驗收：內嵌縮圖與完整解碼的層級選擇測試；色彩轉換套用於縮圖；沒有內嵌縮圖時回退。
+
+### T7：文件與交付（S）
+- 內容：定稿規格、README 支援格式與延伸模組需求、CHANGELOG、驗證紀錄（附元件版本與 exe 體積增量）。CI 中真實 HEVC 測試略過時，在紀錄中明示。
+
+### 檢查點 2
+- [ ] 全工作區測試、Clippy、格式、發布建置與封裝通過；原生驗收清單（規格第 4 節）完成；使用者授權後才提交、建立標籤。
 ## 0.8.3 審查複核（2026-11-11）
 
 - [x] 核對本機提交 `5d3affa`；先前 P2 全景圖尺寸需求已改用共用圖片區幾何與 DPI 計算，並納入原 300 點／3:1／200% DPI 回歸；P3 兩組管理器與動態預算契約已同步。

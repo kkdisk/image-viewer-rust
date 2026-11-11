@@ -37,4 +37,15 @@ pub enum ImageError {
     /// 不支援或無法辨識的影像格式
     #[error("不支援或無法辨識的影像格式: {0}")]
     UnsupportedFormat(String),
+
+    /// 作業系統缺少對應的解碼元件（例如 Windows 的 HEIF／HEVC／AV1 延伸模組）
+    #[error("缺少 {} 解碼元件，請安裝對應的 Windows 延伸模組", codec.label())]
+    CodecMissing {
+        /// 主影像的實際編碼
+        codec: crate::heif::Codec,
+    },
+
+    /// 作業系統解碼器回報的錯誤
+    #[error("系統解碼失敗：{0}")]
+    Platform(String),
 }

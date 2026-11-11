@@ -19,19 +19,9 @@ pub struct SortOptions {
     pub descending: bool,
 }
 
-/// 支援的圖片副檔名清單（小寫）
-pub const SUPPORTED_EXTENSIONS: &[&str] =
-    &["png", "jpg", "jpeg", "bmp", "webp", "tiff", "tif", "gif"];
-
-/// 檢查路徑是否為支援的圖片格式
+/// 檢查路徑是否為支援的圖片格式（清單來源為 `core_image::formats`）
 pub fn is_supported_image(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            let lower = ext.to_lowercase();
-            SUPPORTED_EXTENSIONS.contains(&lower.as_str())
-        })
-        .unwrap_or(false)
+    core_image::formats::is_readable_extension(path)
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
