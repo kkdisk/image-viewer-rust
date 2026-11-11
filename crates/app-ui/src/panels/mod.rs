@@ -34,6 +34,7 @@ pub enum MenuAction {
     CopyPath,
     OpenFolder,
     OpenRecent(usize),
+    ClearRecent,
     Sort(crate::playlist::SortOptions),
     Fullscreen,
     Shortcuts,
@@ -122,6 +123,13 @@ impl MenuBar {
                                     .clicked()
                                 {
                                     triggered_action = Some(MenuAction::OpenRecent(index));
+                                    ui.close_menu();
+                                }
+                            }
+                            if !state.recent.is_empty() {
+                                ui.separator();
+                                if ui.button("清除最近清單").clicked() {
+                                    triggered_action = Some(MenuAction::ClearRecent);
                                     ui.close_menu();
                                 }
                             }

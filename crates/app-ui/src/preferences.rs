@@ -36,6 +36,8 @@ pub struct Preferences {
     pub sort: crate::playlist::SortOptions,
     pub recent: Vec<crate::recent::RecentEntry>,
     pub recent_removed: Vec<crate::recent::RecentEntry>,
+    /// 清除最近清單的時間點：開啟時間不晚於此值的項目一律捨棄，讓其他視窗的舊快照無法復活。
+    pub recent_cleared_ms: u64,
     pub version: u32,
     pub window_size: [f32; 2],
     pub maximized: bool,
@@ -61,6 +63,7 @@ impl Default for Preferences {
             sort: Default::default(),
             recent: Vec::new(),
             recent_removed: Vec::new(),
+            recent_cleared_ms: 0,
             window_size: [1280.0, 800.0],
             maximized: false,
             side_panel: true,
@@ -103,12 +106,7 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
     settings.version = 2;
     settings.recent = crate::recent::merge(&settings.recent, &[]);
     settings.recent_removed = crate::recent::merge(&settings.recent_removed, &[]);
-    settings.recent.retain(|entry| {
-        !settings.recent_removed.iter().any(|removed| {
-            crate::recent::same_path(&entry.path, &removed.path)
-                && removed.opened_ms >= entry.opened_ms
-        })
-    });
+    retain_live_recent(&mut settings);
     settings.filmstrip_height = if settings.filmstrip_height.is_finite() {
         settings.filmstrip_height.clamp(110.0, 220.0)
     } else {
@@ -123,6 +121,22 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
         settings.histogram_mode = 0;
     }
     Ok(settings)
+}
+
+/// 依移除紀錄與清除時間點過濾最近清單；讀取與鎖內合併共用同一規則。
+fn retain_live_recent(settings: &mut Preferences) {
+    let cleared = settings.recent_cleared_ms;
+    let removed = &settings.recent_removed;
+    settings.recent.retain(|entry| {
+        entry.opened_ms > cleared
+            && !removed.iter().any(|removed| {
+                crate::recent::same_path(&entry.path, &removed.path)
+                    && removed.opened_ms >= entry.opened_ms
+            })
+    });
+    settings
+        .recent_removed
+        .retain(|removed| removed.opened_ms > cleared);
 }
 
 #[cfg(test)]
@@ -158,12 +172,8 @@ fn write_snapshot(path: &Path, settings: &Preferences, closing: bool) -> Result<
     };
     merged.recent = crate::recent::merge(&settings.recent, &latest.recent);
     merged.recent_removed = crate::recent::merge(&settings.recent_removed, &latest.recent_removed);
-    merged.recent.retain(|entry| {
-        !merged.recent_removed.iter().any(|removed| {
-            crate::recent::same_path(&entry.path, &removed.path)
-                && removed.opened_ms >= entry.opened_ms
-        })
-    });
+    merged.recent_cleared_ms = settings.recent_cleared_ms.max(latest.recent_cleared_ms);
+    retain_live_recent(&mut merged);
     // 背景開啟失敗後才記錄移除時間；鎖內合併防止其他視窗以舊快照復活項目。
     let bytes = serde_json::to_vec_pretty(&merged).map_err(|error| error.to_string())?;
     let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
@@ -307,6 +317,7 @@ impl crate::app::ImageViewerApp {
                 .iter()
                 .chain(self.preferences.current.recent_removed.iter())
                 .map(|entry| entry.opened_ms)
+                .chain(std::iter::once(self.preferences.current.recent_cleared_ms))
                 .max()
                 .unwrap_or(0)
                 .saturating_add(1),
@@ -325,6 +336,7 @@ impl crate::app::ImageViewerApp {
                 .iter()
                 .chain(&self.preferences.current.recent_removed)
                 .map(|entry| entry.opened_ms)
+                .chain(std::iter::once(self.preferences.current.recent_cleared_ms))
                 .max()
                 .unwrap_or(0)
                 .saturating_add(1),
@@ -337,6 +349,25 @@ impl crate::app::ImageViewerApp {
             &[crate::recent::RecentEntry { path, opened_ms }],
             &self.preferences.current.recent_removed,
         );
+    }
+
+    /// 清除最近清單並立即排入寫入，讓其他視窗的下次合併也套用清除時間點。
+    pub(crate) fn clear_recent(&mut self) {
+        let current = &mut self.preferences.current;
+        current.recent_cleared_ms = crate::recent::timestamp().max(
+            current
+                .recent
+                .iter()
+                .chain(&current.recent_removed)
+                .map(|entry| entry.opened_ms)
+                .chain(std::iter::once(current.recent_cleared_ms))
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        current.recent.clear();
+        current.recent_removed.clear();
+        self.preferences.flush();
     }
 
     pub fn set_sort_options(&mut self, options: crate::playlist::SortOptions) {
@@ -559,6 +590,52 @@ mod tests {
         write_snapshot(&path, &removed, true).unwrap();
         write_snapshot(&path, &stale, false).unwrap();
         assert!(load(&path).unwrap().recent.is_empty());
+    }
+
+    #[test]
+    fn 清除最近清單後舊視窗快照不能復活且之後開啟照常記錄() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let entry = |name: &str, opened_ms| crate::recent::RecentEntry {
+            path: dir.path().join(name),
+            opened_ms,
+        };
+        // 模擬另一個視窗持有的舊快照；時間刻意放在未來，驗證清除時間點仍大於全部既有項目。
+        let future = crate::recent::timestamp() + 60_000;
+        let stale = Preferences {
+            recent: vec![entry("a.png", 1), entry("b.png", future)],
+            recent_removed: vec![entry("old.png", 5)],
+            ..Default::default()
+        };
+        write_snapshot(&path, &stale, true).unwrap();
+
+        let mut app = crate::app::ImageViewerApp::default();
+        app.configure_preferences(load(&path).unwrap(), Some(path.clone()));
+        assert_eq!(app.preferences.current.recent.len(), 2);
+        app.clear_recent();
+        assert!(app.preferences.current.recent.is_empty());
+        assert!(app.preferences.current.recent_cleared_ms > future);
+        assert!(app.preferences.finish().is_none());
+        let cleared = load(&path).unwrap();
+        assert!(cleared.recent.is_empty());
+        assert!(cleared.recent_removed.is_empty());
+
+        // 其他視窗以舊快照做一般寫入與關閉寫入，都不得把項目加回來。
+        write_snapshot(&path, &stale, false).unwrap();
+        write_snapshot(&path, &stale, true).unwrap();
+        assert!(load(&path).unwrap().recent.is_empty());
+
+        // 清除後開啟的新項目時間必須晚於清除時間點，才不會被立即捨棄。
+        let mut app = crate::app::ImageViewerApp::default();
+        app.configure_preferences(load(&path).unwrap(), Some(path.clone()));
+        app.record_recent(dir.path().join("new.png"));
+        assert!(app.preferences.finish().is_none());
+        let reopened = load(&path).unwrap();
+        assert_eq!(reopened.recent.len(), 1);
+        assert!(crate::recent::same_path(
+            &reopened.recent[0].path,
+            &dir.path().join("new.png")
+        ));
     }
 
     #[test]

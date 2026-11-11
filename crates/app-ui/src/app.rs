@@ -1138,6 +1138,7 @@ impl eframe::App for ImageViewerApp {
                             self.status_notification = Some((error, std::time::Instant::now()));
                         }
                     }
+                    crate::panels::MenuAction::ClearRecent => self.clear_recent(),
                     crate::panels::MenuAction::Sort(options) => self.set_sort_options(options),
                     crate::panels::MenuAction::Fullscreen => self.toggle_fullscreen(ctx),
                     crate::panels::MenuAction::Shortcuts => self.browsing.help = true,
